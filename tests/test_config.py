@@ -4,7 +4,7 @@ from types import MappingProxyType
 
 import pytest
 
-from vault_intake.config import Config, Domain, ConfigError, resolve_config
+from vault_intake.config import Domain, ConfigError, resolve_config
 
 
 def test_resolves_fixed_domains_config_happy_path(write_claude_md, tmp_path):
