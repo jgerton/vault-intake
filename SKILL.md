@@ -1,17 +1,18 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 1 only is implemented: validate a Second-Brain vault's CLAUDE.md config (parses the `## Vault Config` YAML block, enforces the Option Z mode pair lock, returns resolved JSON). Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," or "resolve vault-intake config" against a specific CLAUDE.md path. Do not use this skill for general capture, intake, or routing tasks; the rest of the `/vault-intake` pipeline (refinement, classification, frontmatter, wikilinks, routing, NotebookLM) is not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) only is implemented; it parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," or "resolve vault-intake config" against a specific CLAUDE.md path. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 1 through 9 (detect, refine, classify, PARA, frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults; in this commit, only Step 1 (config resolve and validate) is implemented and usable.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. In this commit, only Step 0 is implemented and usable.
 
 ## Status
 
 | Step | Status |
 |---|---|
-| 1. Config resolve and validate | Implemented |
+| 0. Bootstrap: config resolve and validate | Implemented |
+| 1. Detect content type | Not implemented |
 | 2. Refine (transcription / brain dump) | Not implemented |
 | 3. Classify (mode-dependent) | Not implemented |
 | 4. PARA category | Not implemented |
@@ -21,7 +22,7 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 8. Route to destination folder | Not implemented |
 | 9. NotebookLM integration | Not implemented |
 
-Do not invoke this skill end-to-end against a real vault. The Step 1 helper is the only thing safe to use today.
+Do not invoke this skill end-to-end against a real vault. The Step 0 helper is the only thing safe to use today.
 
 ## Spec references
 
@@ -81,7 +82,9 @@ Constraints enforced by Step 1:
 - Each entry in `domains` must be a mapping with both `slug` and `description` fields.
 - Mode pair must be one of the two supported combinations.
 
-## Step 1: Config resolve and validate
+## Step 0: Bootstrap (config resolve and validate)
+
+Step 0 is a precondition for the spec's numbered pipeline. It must succeed before any of Steps 1 through 9 can run.
 
 To resolve and validate a vault's config, run the helper script from this skill's directory:
 
@@ -107,10 +110,11 @@ On any config error (missing required field, malformed YAML, unsupported mode pa
 
 The Python module `vault_intake.config` exposes `resolve_config(path: Path) -> Config` for direct use from other Python code. See `src/vault_intake/config.py` for the dataclass shapes.
 
-## Pipeline (Steps 2 through 9, planned)
+## Pipeline (Steps 1 through 9, planned)
 
 Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests.
 
+1. **Detect content type** classify input as one of `session`, `document`, `reference`, `context`, `prompt`, `transcription`, `note`. If signals overlap, surface a single confirmation question.
 2. **Refine** if input is a transcription or unstructured brain dump. Preserve original verbatim under `## Captura original`.
 3. **Classify** mode-dependent: domain (fixed_domains) or theme (emergent).
 4. **PARA category** if `routing_mode: para` (skipped in emergent).
