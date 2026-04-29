@@ -1,11 +1,11 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), and 4 (PARA category, fixed_domains/para mode only) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," or "categorize vault-intake PARA" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 5 through 9 (frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), and 5 (Generate frontmatter, fixed_domains track only) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Step 5 builds a frozen `Frontmatter` dataclass populated from the upstream pipeline outputs plus capture metadata, emitting the OS-wide canonical baseline (architecture plan Section 1.4.1) and the fixed_domains track-specific additions (build spec lines 122-135) with a kebab-case title heuristic, capped tags, and a `to_yaml()` serializer; emergent mode raises NotImplementedError. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," "categorize vault-intake PARA," or "generate vault-intake frontmatter" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 6 through 9 (wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, 3 (Classify, fixed_domains mode only), and 4 (PARA category, fixed_domains/para mode only) are implemented and usable; Steps 5 through 9 remain. Emergent-mode classification and emergent routing are parallel tracks that land in separate sessions once fixed_domains stabilizes.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), and 5 (Generate frontmatter, fixed_domains track only) are implemented and usable; Steps 6 through 9 remain. Emergent-mode classification, emergent routing, and the emergent frontmatter shape are parallel tracks that land in separate sessions once fixed_domains stabilizes.
 
 ## Status
 
@@ -16,13 +16,13 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 2. Refine (transcription / brain dump) | Implemented |
 | 3. Classify (mode-dependent) | Implemented (fixed_domains only; emergent raises NotImplementedError) |
 | 4. PARA category | Implemented (fixed_domains/para only; emergent raises NotImplementedError) |
-| 5. Generate frontmatter | Not implemented |
+| 5. Generate frontmatter | Implemented (fixed_domains track only; emergent raises NotImplementedError) |
 | 6. Generate wikilinks | Not implemented |
 | 7. Extract candidate next-actions | Not implemented |
 | 8. Route to destination folder | Not implemented |
 | 9. NotebookLM integration | Not implemented |
 
-Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), and Step 4 (PARA, fixed_domains/para) helpers are safe to use today; all five produce intermediate output rather than vault writes.
+Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), and Step 5 (Generate frontmatter, fixed_domains) helpers are safe to use today; all six produce intermediate output rather than vault writes.
 
 ## Spec references
 
@@ -253,11 +253,62 @@ result.uncertain      # True when multiple strong signals fire or area-default l
 result.signals        # tuple of fired signal names (audit trail)
 ```
 
-## Pipeline (Steps 5 through 9, planned)
+## Step 5: Generate frontmatter (mode-dependent)
 
-Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1, 2, 3, and 4 are described in their own sections above.
+Step 5 builds the canonical frontmatter for the captured note per build spec lines 118-153. The OS-wide baseline (architecture plan Section 1.4.1) plus the fixed_domains track-specific additions are populated from the upstream pipeline outputs plus capture metadata. Emergent mode raises `NotImplementedError`; the emergent shape (uses `theme` instead of `domain`, with an open `type` enum) lands in a parallel session.
 
-5. **Generate frontmatter** mode-dependent shape; OS-wide baseline plus track-specific additions.
+**fixed_domains track (v1, implemented):**
+
+Rule-based deterministic builder. Inputs:
+
+- `text`: the input body, used by the title heuristic (callers pass the refined body when refinement applied, otherwise the original).
+- `detection: DetectionResult`: provides `type` (closed enum of 8) for the frontmatter `type` field.
+- `refinement: RefinedContent | None`: None when Step 2 was skipped (already-structured types or `refinement_enabled=False`); otherwise carries `changed`. When `changed` is True, `original_ref` is set to `## Captura original` so downstream consumers know to expect the verbatim block; otherwise empty.
+- `classification: ClassificationResult`: `primary` populates `domain`; `(primary,) + secondary` populates `tags` (capped at 5); `confidence` populates the OS-wide `confidence` field. When classification is uncertain, tags are emitted empty so the user fills in at confirmation.
+- `para: ParaResult`: when category is `project`, `project_slug` populates the `project` field; otherwise empty.
+- `config: Config`: `notebook_map` resolves `domain` to `notebook` (empty string on miss); `mode` gates the function.
+
+Capture metadata is keyword-only: `source_type` (default `"paste"`), `source_uri` (default `""`), `captured_at` (default today's date in ISO format).
+
+Title generation (build spec line 153 "concise, descriptive, kebab-case slug for filename"):
+
+- If the input has a markdown H1 (`# ...`), that line is the title source.
+- Otherwise the first sentence (split on `.!?` followed by whitespace) is the title source.
+- The source is NFKD-normalized to strip accents (so `Reunião` becomes `reuniao`), lowercased, runs of non-alphanumeric characters collapsed to single hyphens, and trimmed of leading and trailing hyphens.
+- Capped at 80 characters; if truncation leaves a trailing hyphen, that hyphen is trimmed.
+- Falls back to `note-{captured_at}` when the source is empty after slugification.
+
+The skill orchestrator confirms the title with the user before file write; the heuristic primes the pump.
+
+**emergent track (v1, not implemented):**
+
+`generate_frontmatter(...)` raises `NotImplementedError` when `config.mode == "emergent"`.
+
+The Python module `vault_intake.frontmatter` exposes `Frontmatter` and `generate_frontmatter`:
+
+```python
+from vault_intake.frontmatter import generate_frontmatter
+
+fm = generate_frontmatter(
+    text=input_text,
+    detection=detection,
+    refinement=refinement,        # or None
+    classification=classification,
+    para=para,
+    config=config,
+    source_type="paste",
+    source_uri="",
+    captured_at=None,             # defaults to today's ISO date
+)
+fm.to_yaml()                      # YAML-frontmatter-ready text
+```
+
+The `Frontmatter` dataclass is frozen. `confidence` is `float | None`; `to_yaml()` emits empty string for None to satisfy the OS-wide baseline's "optional" rule. `source_id` is always empty at frontmatter-creation time and gets filled by Step 9 (NotebookLM) if the user opts in.
+
+## Pipeline (Steps 6 through 9, planned)
+
+Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1, 2, 3, 4, and 5 are described in their own sections above.
+
 6. **Generate wikilinks** mode-aware; cross-domain or cross-theme top-weighted.
 7. **Extract candidate next-actions** gated by action signals only.
 8. **Route to destination folder** mode-dependent.
