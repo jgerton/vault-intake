@@ -35,7 +35,7 @@ def main(argv: list[str]) -> int:
         "domains": [
             {"slug": d.slug, "description": d.description} for d in config.domains
         ],
-        "notebook_map": config.notebook_map,
+        "notebook_map": dict(config.notebook_map),
         "language": config.language,
         "skip_notebooklm": config.skip_notebooklm,
         "refinement_enabled": config.refinement_enabled,

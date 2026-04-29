@@ -8,7 +8,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from types import MappingProxyType
+from typing import Any, Literal, Mapping
 
 import yaml
 
@@ -27,7 +28,7 @@ class Config:
     vault_path: Path
     mode: Mode
     domains: tuple[Domain, ...]
-    notebook_map: dict[str, str]
+    notebook_map: Mapping[str, str]
     language: str
     skip_notebooklm: bool
     refinement_enabled: bool
@@ -37,56 +38,127 @@ class ConfigError(Exception):
     """Raised when vault CLAUDE.md config is missing, malformed, or invalid."""
 
 
-_YAML_BLOCK_PATTERN = re.compile(
-    r"^##\s+Vault Config\s*\n+```yaml\n(?P<yaml>.*?)\n```",
-    re.MULTILINE | re.DOTALL,
-)
+_HEADING = re.compile(r"^##\s+Vault Config\s*$", re.MULTILINE)
+_FENCE_OPEN = re.compile(r"\s*```yaml[ \t]*\n")
+_FENCE_CLOSE = re.compile(r"^```\s*$", re.MULTILINE)
+
+_VALID_PAIRS: dict[tuple[str, str], Mode] = {
+    ("fixed_domains", "para"): "fixed_domains",
+    ("emergent", "emergent"): "emergent",
+}
 
 
 def resolve_config(claude_md_path: Path) -> Config:
     text = Path(claude_md_path).read_text(encoding="utf-8")
-    match = _YAML_BLOCK_PATTERN.search(text)
-    if not match:
-        raise ConfigError(
-            "vault CLAUDE.md missing required '## Vault Config' YAML block"
-        )
+    yaml_text = _extract_yaml(text)
+
     try:
-        raw = yaml.safe_load(match.group("yaml")) or {}
+        raw = yaml.safe_load(yaml_text)
     except yaml.YAMLError as exc:
         raise ConfigError(f"failed to parse YAML in '## Vault Config' block: {exc}") from exc
 
-    vault_path_raw = raw.get("vault_path")
-    if not vault_path_raw:
-        raise ConfigError("missing required field 'vault_path' in vault config")
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"'## Vault Config' YAML must be a mapping (object), got {type(raw).__name__}"
+        )
 
-    classification_mode = raw.get("classification_mode")
-    routing_mode = raw.get("routing_mode")
-    pair = (classification_mode, routing_mode)
-    if pair == ("fixed_domains", "para"):
-        mode: Mode = "fixed_domains"
-    elif pair == ("emergent", "emergent"):
-        mode = "emergent"
-    else:
+    vault_path = _validate_vault_path(raw)
+
+    if "classification_mode" not in raw:
+        raise ConfigError("missing required field 'classification_mode' in vault config")
+    if "routing_mode" not in raw:
+        raise ConfigError("missing required field 'routing_mode' in vault config")
+
+    pair = (raw["classification_mode"], raw["routing_mode"])
+    mode = _VALID_PAIRS.get(pair)
+    if mode is None:
         raise ConfigError(
             f"unsupported (classification_mode, routing_mode) pair: {pair!r}; "
             "supported pairs are ('fixed_domains', 'para') and ('emergent', 'emergent')"
         )
 
-    domains_raw = raw.get("domains") or ()
-    domains = tuple(
-        Domain(slug=d["slug"], description=d["description"]) for d in domains_raw
-    )
+    domains = _parse_domains(raw.get("domains") or ())
     if mode == "fixed_domains" and not domains:
         raise ConfigError(
             "fixed_domains mode requires non-empty 'domains' list in vault config"
         )
 
     return Config(
-        vault_path=Path(vault_path_raw),
+        vault_path=vault_path,
         mode=mode,
         domains=domains,
-        notebook_map=dict(raw.get("notebook_map") or {}),
+        notebook_map=MappingProxyType(dict(raw.get("notebook_map") or {})),
         language=raw.get("language", "en"),
         skip_notebooklm=bool(raw.get("skip_notebooklm", False)),
         refinement_enabled=bool(raw.get("refinement_enabled", True)),
     )
+
+
+def _extract_yaml(text: str) -> str:
+    normalized = text.replace("\r\n", "\n")
+    headings = list(_HEADING.finditer(normalized))
+    if not headings:
+        raise ConfigError(
+            "vault CLAUDE.md missing required '## Vault Config' heading"
+        )
+    if len(headings) > 1:
+        raise ConfigError(
+            "vault CLAUDE.md contains multiple '## Vault Config' blocks; only one is allowed"
+        )
+
+    after_heading = normalized[headings[0].end():]
+    fence_open = _FENCE_OPEN.match(after_heading)
+    if fence_open is None:
+        raise ConfigError(
+            "'## Vault Config' heading must be followed by a fenced ```yaml block"
+        )
+
+    body_start = fence_open.end()
+    fence_close = _FENCE_CLOSE.search(after_heading, body_start)
+    if fence_close is None:
+        raise ConfigError(
+            "'## Vault Config' YAML fence is not closed; expected a closing ``` line"
+        )
+
+    return after_heading[body_start:fence_close.start()]
+
+
+def _validate_vault_path(raw: dict[str, Any]) -> Path:
+    vault_path_raw = raw.get("vault_path")
+    if not vault_path_raw:
+        raise ConfigError("missing required field 'vault_path' in vault config")
+    if not isinstance(vault_path_raw, str):
+        raise ConfigError(
+            f"'vault_path' must be a string, got {type(vault_path_raw).__name__}"
+        )
+    vault_path = Path(vault_path_raw)
+    if not vault_path.is_absolute():
+        raise ConfigError(
+            f"'vault_path' must be absolute, got {vault_path_raw!r}"
+        )
+    return vault_path
+
+
+def _parse_domains(raw: object) -> tuple[Domain, ...]:
+    if not isinstance(raw, (list, tuple)):
+        raise ConfigError(
+            f"'domains' must be a list, got {type(raw).__name__}"
+        )
+    parsed: list[Domain] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ConfigError(
+                f"domain entry at index {index} must be a mapping, got {type(entry).__name__}"
+            )
+        if "slug" not in entry:
+            raise ConfigError(
+                f"domain entry at index {index} missing required 'slug' field"
+            )
+        if "description" not in entry:
+            raise ConfigError(
+                f"domain entry at index {index} missing required 'description' field"
+            )
+        parsed.append(Domain(slug=entry["slug"], description=entry["description"]))
+    return tuple(parsed)

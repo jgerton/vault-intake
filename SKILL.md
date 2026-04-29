@@ -1,43 +1,54 @@
 ---
 name: vault-intake
-description: Universal capture skill for Second-Brain vaults. Use this whenever the user wants to process, organize, save, or route content into their vault, including pasted text, brain dumps, transcriptions, session captures, or files in `_inbox/`. Triggers on phrases like "process this," "organize this," "put this in the vault," "save to inbox," "vault intake," "/vault-intake," and on file-drop workflows where the user expects messy input to become organized notes with frontmatter, wikilinks, and routing. Supports two configurable modes per vault: emergent (theme-based, minimal structure) and fixed_domains (configured domain set with PARA routing).
+description: Memory Branch M1 work-in-progress. Step 1 only is implemented: validate a Second-Brain vault's CLAUDE.md config (parses the `## Vault Config` YAML block, enforces the Option Z mode pair lock, returns resolved JSON). Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," or "resolve vault-intake config" against a specific CLAUDE.md path. Do not use this skill for general capture, intake, or routing tasks; the rest of the `/vault-intake` pipeline (refinement, classification, frontmatter, wikilinks, routing, NotebookLM) is not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill: trusted capture for Second-Brain vaults. Takes messy input (pasted text, brain dumps, `_inbox/` files) and produces organized notes with frontmatter, wikilinks, and routing per the active vault mode.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults; in this commit, only Step 1 (config resolve and validate) is implemented and usable.
 
 ## Status
 
-**Implementation in progress.** Step 1 (config resolve and validate) is implemented and tested. Steps 2 through 9 are pending. Do not invoke this skill end-to-end against a real vault until all steps land. The Step 1 helper is usable on its own to validate a vault's CLAUDE.md config.
+| Step | Status |
+|---|---|
+| 1. Config resolve and validate | Implemented |
+| 2. Refine (transcription / brain dump) | Not implemented |
+| 3. Classify (mode-dependent) | Not implemented |
+| 4. PARA category | Not implemented |
+| 5. Generate frontmatter | Not implemented |
+| 6. Generate wikilinks | Not implemented |
+| 7. Extract candidate next-actions | Not implemented |
+| 8. Route to destination folder | Not implemented |
+| 9. NotebookLM integration | Not implemented |
+
+Do not invoke this skill end-to-end against a real vault. The Step 1 helper is the only thing safe to use today.
 
 ## Spec references
 
 - **Build spec:** `E:/Projects/ai-asst/brand-toolkit-collab/2026-04-23/17-vault-intake-design-requirements.md`
-- **Architecture plan:** `E:/Projects/ai-asst/agentic-os-plan/01-agentic-os-architecture-plan.md` (especially Section 1.4.1 frontmatter baseline, Section 1.5 run artifact contract, Section 1.6 cross-cutting requirements)
-- **Cross-cutting requirements** apply: schema migration and versioning, provenance and audit trail, burst-use compatibility, synthesis as only mandatory human step, `/status` as first-class diagnostic, PII baseline.
+- **Architecture plan:** `E:/Projects/ai-asst/agentic-os-plan/01-agentic-os-architecture-plan.md` (Section 1.4.1 frontmatter baseline, Section 1.5 run artifact contract, Section 1.6 cross-cutting requirements, Section 6.1 Decision 9 mode lock)
 
-## Two modes (locked 2026-04-28)
+## Mode design (Option Z)
 
 The skill supports two opinionated defaults selectable per vault. Single codebase, mode picked from vault CLAUDE.md.
 
 | Aspect | Emergent | Fixed_domains |
 |---|---|---|
 | Default user | Elio's personal instance; advanced users | Generalized YCAH install; newcomers |
-| Vault structure | `_inbox/`, `_sinteses/`, plus emergent folders | `sessions/`, `insights/`, `workflows/`, `prompts/`, `context/`, `projects/`, `references/` |
-| Classification | Themes inferred dynamically | Configured domain set with PARA |
-| Frontmatter | `theme` field; type inferred (open) | `domain` field from configured set; type closed enum |
+| Vault structure (planned) | `_inbox/`, `_sinteses/`, plus emergent folders | `sessions/`, `insights/`, `workflows/`, `prompts/`, `context/`, `projects/`, `references/` |
+| Classification (planned) | Themes inferred dynamically | Configured domain set with PARA |
+| Frontmatter (planned) | `theme` field; type inferred (open) | `domain` field from configured set; type closed enum |
 
 Mode is determined at config-resolve time (Step 1) by the (`classification_mode`, `routing_mode`) pair in vault CLAUDE.md. Only two pairs are supported:
 
 - `(fixed_domains, para)` resolves to internal mode `fixed_domains`
 - `(emergent, emergent)` resolves to internal mode `emergent`
 
-Any other pair raises a config error. This is the Option Z lock: two config keys preserved at the vault surface for spec compatibility, single internal mode for clean code paths.
+Any other pair raises a config error. Two config keys are preserved at the vault surface for spec compatibility; a single internal mode is exposed for clean code paths.
 
 ## Config format
 
-Each vault's CLAUDE.md must contain a `## Vault Config` heading followed by a fenced YAML code block. Example:
+Each vault's CLAUDE.md must contain a single `## Vault Config` heading followed by a fenced YAML code block. Example:
 
 ```markdown
 ## Vault Config
@@ -51,7 +62,7 @@ domains:                             # required if classification_mode == fixed_
     description: First domain description
   - slug: beta
     description: Second domain description
-notebook_map:                        # optional; classification key → NotebookLM notebook ID
+notebook_map:                        # optional; classification key, NotebookLM notebook ID
   alpha: nb-alpha-id
 language: en                         # default: en
 skip_notebooklm: false               # default: false
@@ -59,11 +70,20 @@ refinement_enabled: true             # default: true (Step 2 brain-dump refineme
 ​```
 ```
 
-Required fields: `vault_path`, `classification_mode`, `routing_mode`, plus `domains` if `classification_mode: fixed_domains`. All other fields have defaults.
+Required fields: `vault_path` (must be absolute), `classification_mode`, `routing_mode`, plus `domains` if `classification_mode: fixed_domains`. All other fields have defaults.
 
-## Step 1: Config resolve and validate (implemented)
+Constraints enforced by Step 1:
 
-To resolve and validate a vault's config, run the helper script:
+- Exactly one `## Vault Config` heading must appear in CLAUDE.md (multiple is an error).
+- The heading must be immediately followed by a fenced ```yaml block.
+- The fence must be closed.
+- The YAML root must be a mapping (object), not a scalar or list.
+- Each entry in `domains` must be a mapping with both `slug` and `description` fields.
+- Mode pair must be one of the two supported combinations.
+
+## Step 1: Config resolve and validate
+
+To resolve and validate a vault's config, run the helper script from this skill's directory:
 
 ```bash
 uv run scripts/resolve_config.py <path-to-vault-CLAUDE.md>
@@ -83,13 +103,13 @@ On success, prints resolved config as JSON to stdout and exits 0:
 }
 ```
 
-On any config error (missing required field, malformed YAML, unsupported mode pair, fixed_domains without domains, etc.), prints a clear message to stderr and exits non-zero. Surface the error to the user verbatim; do not attempt to repair vault config silently.
+On any config error (missing required field, malformed YAML, unsupported mode pair, fixed_domains without domains, multiple Vault Config blocks, unterminated fence, non-mapping YAML root, malformed domain entry, etc.), prints a clear message to stderr and exits non-zero. Surface the error to the user verbatim; do not attempt to repair vault config silently.
 
-The Python module `vault_intake.config` exposes `resolve_config(path: Path) -> Config` for direct use from other scripts. See `src/vault_intake/config.py` for the dataclass shapes.
+The Python module `vault_intake.config` exposes `resolve_config(path: Path) -> Config` for direct use from other Python code. See `src/vault_intake/config.py` for the dataclass shapes.
 
-## Steps 2 through 9 (pending)
+## Pipeline (Steps 2 through 9, planned)
 
-Pipeline overview, to be implemented in subsequent commits:
+Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests.
 
 2. **Refine** if input is a transcription or unstructured brain dump. Preserve original verbatim under `## Captura original`.
 3. **Classify** mode-dependent: domain (fixed_domains) or theme (emergent).
@@ -100,9 +120,9 @@ Pipeline overview, to be implemented in subsequent commits:
 8. **Route to destination folder** mode-dependent.
 9. **NotebookLM integration** opt-in with graceful degradation.
 
-Each step is documented in detail in the M1 build spec.
+Each step is documented in detail in the M1 build spec. Multi-invocation paths (slash command, natural language, file drop, batch, external call) are designed for the full pipeline but not in scope for the current commit.
 
-## Safety rules (consolidated, apply across all steps)
+## Safety rules (consolidated, apply across all steps when implemented)
 
 1. Never edit user's original content. Preserve verbatim in `## Captura original` block.
 2. Ask one question when classification uncertain, not a list of options.
@@ -110,16 +130,6 @@ Each step is documented in detail in the M1 build spec.
 4. Never block on NotebookLM failure; skip gracefully.
 5. Never write a note without user confirmation of draft (unless batch mode has pre-approval).
 6. Never cross into another vault or write outside `vault_path`.
-
-## Triggers
-
-The skill is designed to be invocable via:
-
-1. Slash command: `/vault-intake`
-2. Natural language in chat ("process this," "organize this," "put this in the vault," "save to inbox")
-3. File drop into `_inbox/` followed by trigger 1 or 2
-4. Batch mode: process all files in `_inbox/`
-5. External call (future): from a hook, scheduled agent, or orchestration layer
 
 ## Development
 
