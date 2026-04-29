@@ -380,3 +380,65 @@ def test_notebook_map_is_immutable(write_claude_md, tmp_path):
     assert isinstance(config.notebook_map, MappingProxyType)
     with pytest.raises(TypeError):
         config.notebook_map["alpha"] = "tampered"  # type: ignore[index]
+
+
+def test_classification_confidence_threshold_default(write_claude_md, tmp_path):
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "emergent",
+        "routing_mode": "emergent",
+    })
+
+    config = resolve_config(claude_md)
+
+    assert config.classification_confidence_threshold == 0.6
+
+
+def test_classification_confidence_threshold_explicit(write_claude_md, tmp_path):
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "fixed_domains",
+        "routing_mode": "para",
+        "domains": [{"slug": "alpha", "description": "x"}],
+        "classification_confidence_threshold": 0.75,
+    })
+
+    config = resolve_config(claude_md)
+
+    assert config.classification_confidence_threshold == 0.75
+
+
+def test_rejects_classification_confidence_threshold_below_zero(write_claude_md, tmp_path):
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "emergent",
+        "routing_mode": "emergent",
+        "classification_confidence_threshold": -0.1,
+    })
+
+    with pytest.raises(ConfigError, match=r"classification_confidence_threshold"):
+        resolve_config(claude_md)
+
+
+def test_rejects_classification_confidence_threshold_above_one(write_claude_md, tmp_path):
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "emergent",
+        "routing_mode": "emergent",
+        "classification_confidence_threshold": 1.5,
+    })
+
+    with pytest.raises(ConfigError, match=r"classification_confidence_threshold"):
+        resolve_config(claude_md)
+
+
+def test_rejects_classification_confidence_threshold_non_numeric(write_claude_md, tmp_path):
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "emergent",
+        "routing_mode": "emergent",
+        "classification_confidence_threshold": "high",
+    })
+
+    with pytest.raises(ConfigError, match=r"classification_confidence_threshold"):
+        resolve_config(claude_md)

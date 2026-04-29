@@ -1,11 +1,11 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type) and 2 (Refine) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," or "refine vault-intake content" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 3 through 9 (classify, PARA, frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), and 3 (Classify, fixed_domains mode only) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation; emergent mode raises NotImplementedError until the emergent track lands. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," or "classify vault-intake content" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 4 through 9 (PARA, frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1 and 2 are implemented and usable; Steps 3 through 9 remain.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, and 3 (Classify, fixed_domains mode only) are implemented and usable; Steps 4 through 9 remain. Emergent-mode classification is a parallel track that lands in a separate session once fixed_domains stabilizes.
 
 ## Status
 
@@ -14,7 +14,7 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 0. Bootstrap: config resolve and validate | Implemented |
 | 1. Detect content type | Implemented |
 | 2. Refine (transcription / brain dump) | Implemented |
-| 3. Classify (mode-dependent) | Not implemented |
+| 3. Classify (mode-dependent) | Implemented (fixed_domains only; emergent raises NotImplementedError) |
 | 4. PARA category | Not implemented |
 | 5. Generate frontmatter | Not implemented |
 | 6. Generate wikilinks | Not implemented |
@@ -22,7 +22,7 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 8. Route to destination folder | Not implemented |
 | 9. NotebookLM integration | Not implemented |
 
-Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), and Step 2 (Refine) helpers are safe to use today; all three produce intermediate output rather than vault writes.
+Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), and Step 3 (Classify, fixed_domains) helpers are safe to use today; all four produce intermediate output rather than vault writes.
 
 ## Spec references
 
@@ -68,6 +68,7 @@ notebook_map:                        # optional; classification key, NotebookLM 
 language: en                         # default: en
 skip_notebooklm: false               # default: false
 refinement_enabled: true             # default: true (Step 2 brain-dump refinement)
+classification_confidence_threshold: 0.6  # default: 0.6; Step 3 confidence below this flips uncertain=True
 ​```
 ```
 
@@ -185,11 +186,43 @@ Skill template assembles the final markdown after Step 2:
 
 Skip Step 2 entirely when `Config.refinement_enabled` is False or `DetectionResult.refinement_applicable` is False; do not call `refine()` at all in those cases. The function itself does not duplicate the gate.
 
-## Pipeline (Steps 3 through 9, planned)
+## Step 3: Classify (mode-dependent)
 
-Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1 and 2 are described in their own sections above.
+Step 3 classifies refined or unrefined content into a primary domain (fixed_domains mode) or theme (emergent mode) per build spec lines 85-105. Step 3 runs after Step 1 regardless of `refinement_applicable`; types like `session`, `document`, and `reference` skip Step 2 but still need classification.
 
-3. **Classify** mode-dependent: domain (fixed_domains) or theme (emergent).
+**fixed_domains mode (v1, implemented):**
+
+Rule-based keyword matching against each configured domain's slug and description. Picks the highest-scoring domain as primary, includes other domains as secondary tags when their score is at least 40 percent of the primary score, and surfaces a confidence value plus an uncertainty flag.
+
+Scoring details:
+
+- The input and each domain's `slug + description` are tokenized to lowercase word sets with a small English stop-word filter (`the`, `and`, `is`, etc.) so common connectors do not inflate scores.
+- Domain score = number of distinct vocab tokens that appear in the input, plus a fixed bonus when the literal slug is mentioned in the input. Slug mentions outweigh description-only token matches.
+- Confidence = `primary_score / max(min_evidence_floor, primary_score + runner_up_score)`. The evidence floor (5) keeps confidence below 1.0 when the absolute hit count is sparse, even when the primary is unchallenged.
+- `uncertain = confidence < classification_confidence_threshold` (config field, default 0.6). When `uncertain` is True the caller asks one confirmation question per consolidated safety rule 2 and 3.
+- When all domain scores are zero, primary defaults to the first-listed domain in `Config.domains` and confidence is 0.0 (always uncertain).
+
+**emergent mode (v1, not implemented):**
+
+Calling `classify(text, config)` with `config.mode == "emergent"` raises `NotImplementedError`. Emergent classification (read existing themes from `_sinteses/`, emergent folder names, and `theme` frontmatter; match or propose a new theme; never auto-create folders) lands in a parallel session track once fixed_domains stabilizes.
+
+The Python module `vault_intake.classify` exposes `classify(text: str, config: Config) -> ClassificationResult`:
+
+```python
+from vault_intake.classify import classify
+
+result = classify(input_text, config)
+result.primary      # domain slug (fixed_domains) or theme name (emergent)
+result.secondary    # tuple of secondary domain or theme tags
+result.confidence   # 0.0 to 1.0
+result.uncertain    # True when confidence < config.classification_confidence_threshold
+result.mode         # "fixed_domains" or "emergent"
+```
+
+## Pipeline (Steps 4 through 9, planned)
+
+Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1, 2, and 3 are described in their own sections above.
+
 4. **PARA category** if `routing_mode: para` (skipped in emergent).
 5. **Generate frontmatter** mode-dependent shape; OS-wide baseline plus track-specific additions.
 6. **Generate wikilinks** mode-aware; cross-domain or cross-theme top-weighted.

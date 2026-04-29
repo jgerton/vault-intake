@@ -32,6 +32,7 @@ class Config:
     language: str
     skip_notebooklm: bool
     refinement_enabled: bool
+    classification_confidence_threshold: float
 
 
 class ConfigError(Exception):
@@ -85,6 +86,8 @@ def resolve_config(claude_md_path: Path) -> Config:
             "fixed_domains mode requires non-empty 'domains' list in vault config"
         )
 
+    threshold = _validate_confidence_threshold(raw)
+
     return Config(
         vault_path=vault_path,
         mode=mode,
@@ -93,6 +96,7 @@ def resolve_config(claude_md_path: Path) -> Config:
         language=raw.get("language", "en"),
         skip_notebooklm=bool(raw.get("skip_notebooklm", False)),
         refinement_enabled=bool(raw.get("refinement_enabled", True)),
+        classification_confidence_threshold=threshold,
     )
 
 
@@ -139,6 +143,23 @@ def _validate_vault_path(raw: dict[str, Any]) -> Path:
             f"'vault_path' must be absolute, got {vault_path_raw!r}"
         )
     return vault_path
+
+
+def _validate_confidence_threshold(raw: dict[str, Any]) -> float:
+    if "classification_confidence_threshold" not in raw:
+        return 0.6
+    value = raw["classification_confidence_threshold"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(
+            "'classification_confidence_threshold' must be a number between 0 and 1, "
+            f"got {type(value).__name__}"
+        )
+    if not 0.0 <= float(value) <= 1.0:
+        raise ConfigError(
+            "'classification_confidence_threshold' must be between 0 and 1, "
+            f"got {value!r}"
+        )
+    return float(value)
 
 
 def _parse_domains(raw: object) -> tuple[Domain, ...]:
