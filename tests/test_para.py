@@ -252,6 +252,23 @@ def test_multiple_matching_project_slugs_pick_alphabetically_first(tmp_path: Pat
     assert result.project_slug == "alpha-launch"
 
 
+def test_longer_prefix_slug_wins_over_shorter_alphabetical(tmp_path: Path) -> None:
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    (projects_dir / "launch-redesign.md").write_text("# Short\n", encoding="utf-8")
+    (projects_dir / "launch-redesign-extended.md").write_text(
+        "# Extended\n", encoding="utf-8"
+    )
+
+    config = _make_config(tmp_path)
+    text = "Notes specifically about launch-redesign-extended scope only."
+
+    result = categorize_para(text, _make_detection(), _make_classification(), config)
+
+    assert result.category == "project"
+    assert result.project_slug == "launch-redesign-extended"
+
+
 def test_slug_must_match_at_word_boundary_not_substring(tmp_path: Path) -> None:
     projects_dir = tmp_path / "projects"
     projects_dir.mkdir()

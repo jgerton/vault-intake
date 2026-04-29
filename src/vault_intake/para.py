@@ -131,7 +131,13 @@ def _iter_project_slugs(projects_dir: Path) -> Iterable[str]:
 
 
 def _slug_mentioned(text: str, slug: str) -> bool:
-    pattern = re.compile(rf"(?<!\w){re.escape(slug)}(?!\w)", re.IGNORECASE)
+    # Exclude hyphens from the boundary so a shorter slug like
+    # "launch-redesign" does not spuriously match inside a longer
+    # hyphenated slug like "launch-redesign-extended" mentioned in
+    # the input. Without this, the alphabetically-first iteration
+    # in `_detect_project_slug` would attribute the longer mention
+    # to the shorter project.
+    pattern = re.compile(rf"(?<![\w-]){re.escape(slug)}(?![\w-])", re.IGNORECASE)
     return bool(pattern.search(text))
 
 
