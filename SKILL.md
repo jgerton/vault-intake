@@ -1,18 +1,18 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) only is implemented; it parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," or "resolve vault-intake config" against a specific CLAUDE.md path. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 1 through 9 (detect, refine, classify, PARA, frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Step 1 (Detect content type) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," or "detect vault-intake content type" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 2 through 9 (refine, classify, PARA, frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. In this commit, only Step 0 is implemented and usable.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Step 1 are implemented and usable; Steps 2 through 9 remain.
 
 ## Status
 
 | Step | Status |
 |---|---|
 | 0. Bootstrap: config resolve and validate | Implemented |
-| 1. Detect content type | Not implemented |
+| 1. Detect content type | Implemented |
 | 2. Refine (transcription / brain dump) | Not implemented |
 | 3. Classify (mode-dependent) | Not implemented |
 | 4. PARA category | Not implemented |
@@ -22,7 +22,7 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 8. Route to destination folder | Not implemented |
 | 9. NotebookLM integration | Not implemented |
 
-Do not invoke this skill end-to-end against a real vault. The Step 0 helper is the only thing safe to use today.
+Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap) helper and the Step 1 (Detect content type) helper are safe to use today; both produce intermediate output rather than vault writes.
 
 ## Spec references
 
@@ -110,11 +110,40 @@ On any config error (missing required field, malformed YAML, unsupported mode pa
 
 The Python module `vault_intake.config` exposes `resolve_config(path: Path) -> Config` for direct use from other Python code. See `src/vault_intake/config.py` for the dataclass shapes.
 
-## Pipeline (Steps 1 through 9, planned)
+## Step 1: Detect content type
 
-Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests.
+Step 1 classifies raw input into one of seven closed-enum content types per build spec lines 56-68:
 
-1. **Detect content type** classify input as one of `session`, `document`, `reference`, `context`, `prompt`, `transcription`, `note`. If signals overlap, surface a single confirmation question.
+| Type | Signal |
+|---|---|
+| `session` | conversational structure with user/assistant turns |
+| `document` | clear sections and headings (markdown structure) |
+| `reference` | URL, citation, external author |
+| `context` | first-person decision phrasing ("I decided," "my position is," "for client X we do Y") |
+| `prompt` | directive phrasing for another tool ("send this to," "prompt for," "use this with") |
+| `transcription` | length above 300 words plus informal connectives ("e," "aí," "então," "tipo") with no markdown |
+| `note` | default when no stronger signal fires |
+
+The Python module `vault_intake.detect` exposes `detect_content_type(text: str) -> DetectionResult` for direct use:
+
+```python
+from vault_intake.detect import detect_content_type
+
+result = detect_content_type(input_text)
+result.type                    # one of the 7 ContentType literals
+result.uncertain               # True when signals overlapped across types
+result.signals                 # tuple of detected signal names for the winning type
+result.refinement_applicable   # True for transcriptions and brain-dump notes; gates Step 2
+```
+
+When `uncertain` is True, the skill must ask the user a single confirmation question with the detected type as the proposed answer (consolidated safety rule 2). Do not present a multi-option list. When `refinement_applicable` is True, Step 2 (Refine) runs after user confirmation; otherwise the pipeline skips Step 2.
+
+`refinement_applicable` is True for `transcription` and for unstructured brain-dump notes (no markdown headings, at least twenty words). It is False for `document`, `reference`, `context`, `prompt`, `session`, and short-or-structured notes. Step 1 makes the gating decision so callers do not duplicate the heuristic.
+
+## Pipeline (Steps 2 through 9, planned)
+
+Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Step 1 is described in its own section above.
+
 2. **Refine** if input is a transcription or unstructured brain dump. Preserve original verbatim under `## Captura original`.
 3. **Classify** mode-dependent: domain (fixed_domains) or theme (emergent).
 4. **PARA category** if `routing_mode: para` (skipped in emergent).
