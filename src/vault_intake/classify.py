@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from .config import Config
+from .config import Config, ConfigError
 
 
 Mode = Literal["fixed_domains", "emergent"]
@@ -30,7 +30,9 @@ _SECONDARY_RATIO = 0.4
 # token overlap (a slug hit lands at 1 + _SLUG_BONUS = 3 total points).
 _SLUG_BONUS = 2
 
-_WORD_RE = re.compile(r"[a-z]+")
+# Match runs of Unicode letters (excludes digits, underscores, punctuation).
+# Tokens are lowercased first so the regex never sees uppercase forms.
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 # Minimal stop-word list to prevent common English connectors from
 # spuriously matching domain descriptions during tokenization.
@@ -61,6 +63,11 @@ def classify(text: str, config: Config) -> ClassificationResult:
         raise NotImplementedError(
             "emergent mode classify is not implemented in v1; "
             "use classification_mode: fixed_domains for now"
+        )
+
+    if not config.domains:
+        raise ConfigError(
+            "fixed_domains classify requires Config.domains to be non-empty"
         )
 
     input_tokens = _tokenize(text)

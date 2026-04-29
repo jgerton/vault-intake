@@ -432,6 +432,54 @@ def test_rejects_classification_confidence_threshold_above_one(write_claude_md, 
         resolve_config(claude_md)
 
 
+def test_rejects_non_string_domain_slug(write_claude_md, tmp_path):
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "fixed_domains",
+        "routing_mode": "para",
+        "domains": [{"slug": 42, "description": "ok"}],
+    })
+
+    with pytest.raises(ConfigError, match=r"slug"):
+        resolve_config(claude_md)
+
+
+def test_rejects_empty_domain_slug(write_claude_md, tmp_path):
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "fixed_domains",
+        "routing_mode": "para",
+        "domains": [{"slug": "   ", "description": "ok"}],
+    })
+
+    with pytest.raises(ConfigError, match=r"slug"):
+        resolve_config(claude_md)
+
+
+def test_rejects_non_string_domain_description(write_claude_md, tmp_path):
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "fixed_domains",
+        "routing_mode": "para",
+        "domains": [{"slug": "alpha", "description": 99}],
+    })
+
+    with pytest.raises(ConfigError, match=r"description"):
+        resolve_config(claude_md)
+
+
+def test_rejects_empty_domain_description(write_claude_md, tmp_path):
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "fixed_domains",
+        "routing_mode": "para",
+        "domains": [{"slug": "alpha", "description": ""}],
+    })
+
+    with pytest.raises(ConfigError, match=r"description"):
+        resolve_config(claude_md)
+
+
 def test_rejects_classification_confidence_threshold_non_numeric(write_claude_md, tmp_path):
     claude_md = write_claude_md({
         "vault_path": str(tmp_path),

@@ -8,8 +8,8 @@ from types import MappingProxyType
 
 import pytest
 
-from vault_intake.classify import ClassificationResult, classify
-from vault_intake.config import Config, Domain
+from vault_intake.classify import ClassificationResult, _tokenize, classify
+from vault_intake.config import Config, ConfigError, Domain
 
 
 def _make_config(
@@ -140,6 +140,21 @@ def test_emergent_mode_raises_not_implemented():
 
     with pytest.raises(NotImplementedError, match=r"emergent"):
         classify("any content", config)
+
+
+def test_tokenizer_preserves_unicode_letters():
+    tokens = _tokenize("Saúde, alimentação, exercício.")
+
+    assert "saúde" in tokens
+    assert "alimentação" in tokens
+    assert "exercício" in tokens
+
+
+def test_classify_raises_on_empty_domains_in_fixed_mode():
+    config = _make_config(domains=())  # fixed_domains with no domains configured
+
+    with pytest.raises(ConfigError, match=r"domains"):
+        classify("any text here", config)
 
 
 def test_threshold_read_from_config_changes_uncertain():

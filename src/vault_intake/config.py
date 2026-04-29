@@ -181,5 +181,17 @@ def _parse_domains(raw: object) -> tuple[Domain, ...]:
             raise ConfigError(
                 f"domain entry at index {index} missing required 'description' field"
             )
-        parsed.append(Domain(slug=entry["slug"], description=entry["description"]))
+        slug = entry["slug"]
+        if not isinstance(slug, str) or not slug.strip():
+            raise ConfigError(
+                f"domain entry at index {index} 'slug' must be a non-empty string, "
+                f"got {type(slug).__name__}: {slug!r}"
+            )
+        description = entry["description"]
+        if not isinstance(description, str) or not description.strip():
+            raise ConfigError(
+                f"domain entry at index {index} 'description' must be a non-empty string, "
+                f"got {type(description).__name__}: {description!r}"
+            )
+        parsed.append(Domain(slug=slug, description=description))
     return tuple(parsed)
