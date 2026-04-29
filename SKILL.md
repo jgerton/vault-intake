@@ -1,11 +1,11 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Step 1 (Detect content type) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," or "detect vault-intake content type" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 2 through 9 (refine, classify, PARA, frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type) and 2 (Refine) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," or "refine vault-intake content" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 3 through 9 (classify, PARA, frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Step 1 are implemented and usable; Steps 2 through 9 remain.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1 and 2 are implemented and usable; Steps 3 through 9 remain.
 
 ## Status
 
@@ -13,7 +13,7 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 |---|---|
 | 0. Bootstrap: config resolve and validate | Implemented |
 | 1. Detect content type | Implemented |
-| 2. Refine (transcription / brain dump) | Not implemented |
+| 2. Refine (transcription / brain dump) | Implemented |
 | 3. Classify (mode-dependent) | Not implemented |
 | 4. PARA category | Not implemented |
 | 5. Generate frontmatter | Not implemented |
@@ -22,7 +22,7 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 8. Route to destination folder | Not implemented |
 | 9. NotebookLM integration | Not implemented |
 
-Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap) helper and the Step 1 (Detect content type) helper are safe to use today; both produce intermediate output rather than vault writes.
+Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), and Step 2 (Refine) helpers are safe to use today; all three produce intermediate output rather than vault writes.
 
 ## Spec references
 
@@ -140,11 +140,55 @@ When `uncertain` is True, the skill must ask the user a single confirmation ques
 
 `refinement_applicable` is True for `transcription` and for unstructured brain-dump notes (no markdown headings, at least twenty words). It is False for `document`, `reference`, `context`, `prompt`, `session`, and short-or-structured notes. Step 1 makes the gating decision so callers do not duplicate the heuristic.
 
-## Pipeline (Steps 2 through 9, planned)
+## Step 2: Refine
 
-Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Step 1 is described in its own section above.
+Step 2 produces a readability-pass version of oral or brain-dump content per build spec lines 70-84. It runs only when both `Config.refinement_enabled` is True and `DetectionResult.refinement_applicable` is True; the skill orchestrator gates the call. The function itself is unconditional and assumes its caller has already decided refinement is applicable.
 
-2. **Refine** if input is a transcription or unstructured brain dump. Preserve original verbatim under `## Captura original`.
+The refined version replaces the primary body of the note. The verbatim original is preserved by the caller under a `## Captura original` block at the bottom of the final markdown so the user can revert at any time.
+
+Refinement rules (rule-based v1):
+
+- Light filler removal: `tipo`, `aí`, `né`, and the multiword `e aí` are stripped only at word boundaries (Python `\b`), so substrings like `típico`, `país`, and `tipos` are preserved.
+- Conservative paragraph segmentation at sentence-end punctuation followed by an oral-monologue connective (`e`, `aí`, `então`, `tipo`).
+- Soft cap of five sentences per paragraph: when no connective signal fires, a paragraph break is forced after every fifth sentence so wall-of-text monologues still gain structure.
+- Pre-existing `\n\n` paragraph breaks are preserved.
+
+Six non-negotiable safety rules apply (spec lines 73-79):
+
+1. Never edit the user's original content; the original is returned unchanged in `RefinedContent.original`.
+2. Remove only filler that is pure noise.
+3. Preserve all ideas, even partial or contradictory.
+4. Do not editorialize, summarize, or interpret.
+5. Do not add information not in the original.
+6. Do not remove items because they seem off-topic.
+
+The Python module `vault_intake.refine` exposes `refine(text: str) -> RefinedContent`:
+
+```python
+from vault_intake.refine import refine
+
+result = refine(input_text)
+result.refined    # readability-pass version (paragraph-broken, light filler removal)
+result.original   # verbatim original, never edited
+result.changed    # True when refined != original
+```
+
+Skill template assembles the final markdown after Step 2:
+
+```
+{result.refined}
+
+## Captura original
+
+{result.original}
+```
+
+Skip Step 2 entirely when `Config.refinement_enabled` is False or `DetectionResult.refinement_applicable` is False; do not call `refine()` at all in those cases. The function itself does not duplicate the gate.
+
+## Pipeline (Steps 3 through 9, planned)
+
+Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1 and 2 are described in their own sections above.
+
 3. **Classify** mode-dependent: domain (fixed_domains) or theme (emergent).
 4. **PARA category** if `routing_mode: para` (skipped in emergent).
 5. **Generate frontmatter** mode-dependent shape; OS-wide baseline plus track-specific additions.
