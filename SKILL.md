@@ -1,11 +1,11 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), and 3 (Classify, fixed_domains mode only) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation; emergent mode raises NotImplementedError until the emergent track lands. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," or "classify vault-intake content" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 4 through 9 (PARA, frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), and 4 (PARA category, fixed_domains/para mode only) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," or "categorize vault-intake PARA" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 5 through 9 (frontmatter, wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, and 3 (Classify, fixed_domains mode only) are implemented and usable; Steps 4 through 9 remain. Emergent-mode classification is a parallel track that lands in a separate session once fixed_domains stabilizes.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, 3 (Classify, fixed_domains mode only), and 4 (PARA category, fixed_domains/para mode only) are implemented and usable; Steps 5 through 9 remain. Emergent-mode classification and emergent routing are parallel tracks that land in separate sessions once fixed_domains stabilizes.
 
 ## Status
 
@@ -15,14 +15,14 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 1. Detect content type | Implemented |
 | 2. Refine (transcription / brain dump) | Implemented |
 | 3. Classify (mode-dependent) | Implemented (fixed_domains only; emergent raises NotImplementedError) |
-| 4. PARA category | Not implemented |
+| 4. PARA category | Implemented (fixed_domains/para only; emergent raises NotImplementedError) |
 | 5. Generate frontmatter | Not implemented |
 | 6. Generate wikilinks | Not implemented |
 | 7. Extract candidate next-actions | Not implemented |
 | 8. Route to destination folder | Not implemented |
 | 9. NotebookLM integration | Not implemented |
 
-Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), and Step 3 (Classify, fixed_domains) helpers are safe to use today; all four produce intermediate output rather than vault writes.
+Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), and Step 4 (PARA, fixed_domains/para) helpers are safe to use today; all five produce intermediate output rather than vault writes.
 
 ## Spec references
 
@@ -219,11 +219,44 @@ result.uncertain    # True when confidence < config.classification_confidence_th
 result.mode         # "fixed_domains" or "emergent"
 ```
 
-## Pipeline (Steps 4 through 9, planned)
+## Step 4: Categorize PARA category (mode-gated)
 
-Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1, 2, and 3 are described in their own sections above.
+Step 4 categorizes content into one of four PARA buckets per build spec lines 107-117. It runs only in `fixed_domains/para` mode; emergent mode routes by theme in Step 8 instead, so calling `categorize_para()` with `config.mode == "emergent"` raises `NotImplementedError`. The function-side gate is unconditional; the skill orchestrator decides whether to call.
 
-4. **PARA category** if `routing_mode: para` (skipped in emergent).
+**fixed_domains/para mode (v1, implemented):**
+
+Rule-based heuristics inspecting the raw text plus the upstream `DetectionResult` and `ClassificationResult`. Strong signals fire when:
+
+- `project_slug_match`: input mentions a slug found in `vault_path/projects/` (file stem or folder name; case-insensitive; word-boundary). When the projects directory is missing, the signal cannot fire.
+- `reference_content_type`: `DetectionResult.type == "reference"`.
+- `archive_phrasing`: lowercased text contains "we used to," "old approach was," "deprecated," "no longer used," or "superseded."
+
+Category priority among strong signals: project > resource > archive > area. Area is the default when no strong signal fires. The `signals` field captures every signal that fired (including a descriptive `domain_in_scope` flag when the area default is backed by a confident classification primary), so the audit trail is preserved even when the winning category is set by priority.
+
+`uncertain` flips True when more than one strong signal fires (multiple categories competing) or when the result falls back to area without classification confidence (no project, no reference, no archive phrasing, classification uncertain or primary outside configured domains).
+
+When category is `project`, `project_slug` is set to the matched slug; otherwise `project_slug` is None. When multiple project slugs match the input, the alphabetically-first match is returned for determinism.
+
+**emergent mode (v1, not applicable):**
+
+`categorize_para(text, detection, classification, config)` raises `NotImplementedError` when `config.mode == "emergent"`. PARA is a fixed_domains/para construct; emergent vaults never call it.
+
+The Python module `vault_intake.para` exposes `categorize_para`:
+
+```python
+from vault_intake.para import categorize_para
+
+result = categorize_para(input_text, detection, classification, config)
+result.category       # "project" | "area" | "resource" | "archive"
+result.project_slug   # slug string when category == "project", else None
+result.uncertain      # True when multiple strong signals fire or area-default lacks evidence
+result.signals        # tuple of fired signal names (audit trail)
+```
+
+## Pipeline (Steps 5 through 9, planned)
+
+Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1, 2, 3, and 4 are described in their own sections above.
+
 5. **Generate frontmatter** mode-dependent shape; OS-wide baseline plus track-specific additions.
 6. **Generate wikilinks** mode-aware; cross-domain or cross-theme top-weighted.
 7. **Extract candidate next-actions** gated by action signals only.
