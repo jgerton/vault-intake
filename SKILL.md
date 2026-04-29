@@ -138,7 +138,7 @@ result.refinement_applicable   # True for transcriptions and brain-dump notes; g
 
 When `uncertain` is True, the skill must ask the user a single confirmation question with the detected type as the proposed answer (consolidated safety rule 2). Do not present a multi-option list. When `refinement_applicable` is True, Step 2 (Refine) runs after user confirmation; otherwise the pipeline skips Step 2.
 
-`refinement_applicable` is True for `transcription` and for unstructured brain-dump notes (no markdown headings, at least twenty words). It is False for `document`, `reference`, `context`, `prompt`, `session`, and short-or-structured notes. Step 1 makes the gating decision so callers do not duplicate the heuristic.
+`refinement_applicable` is True for `transcription` always, and for `note`, `context`, or `prompt` when the input passes the brain-dump check (no markdown headings, at least twenty words). It is False for `document`, `reference`, and `session` always, and for `note`, `context`, or `prompt` that do not meet the brain-dump threshold. Step 1 makes the gating decision so callers do not duplicate the heuristic.
 
 ## Step 2: Refine
 

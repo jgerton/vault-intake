@@ -51,6 +51,9 @@ _PARAGRAPH_SPLIT_PATTERN = re.compile(r"\n\s*\n+")
 _SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
 _MULTIPLE_SPACES_PATTERN = re.compile(r" {2,}")
 _SPACE_BEFORE_PUNCTUATION_PATTERN = re.compile(r"\s+([,.!?;:])")
+_REPEATED_COMMAS_PATTERN = re.compile(r",{2,}")
+_EMPTY_PARENS_PATTERN = re.compile(r"\(\s*\)")
+_LEADING_PUNCTUATION_PATTERN = re.compile(r"^[\s,;:]+")
 
 
 def refine(text: str) -> RefinedContent:
@@ -125,6 +128,10 @@ def _first_word_lower(sentence: str) -> str:
 
 def _remove_fillers(paragraph: str) -> str:
     out = paragraph
+    # V1 deliberate choice: filler matching is case-insensitive. A
+    # standalone capitalized "Tipo", "Aí", or "Né" is treated as filler
+    # even when it might be a proper noun. Users recover any such usage
+    # from the verbatim original block (`## Captura original`).
     for filler in _MULTIWORD_FILLERS:
         out = re.sub(
             rf"\b{re.escape(filler)}\b",
@@ -141,4 +148,8 @@ def _remove_fillers(paragraph: str) -> str:
         )
     out = _MULTIPLE_SPACES_PATTERN.sub(" ", out)
     out = _SPACE_BEFORE_PUNCTUATION_PATTERN.sub(r"\1", out)
+    out = _REPEATED_COMMAS_PATTERN.sub(",", out)
+    out = _EMPTY_PARENS_PATTERN.sub("", out)
+    out = _MULTIPLE_SPACES_PATTERN.sub(" ", out)
+    out = _LEADING_PUNCTUATION_PATTERN.sub("", out)
     return out.strip()

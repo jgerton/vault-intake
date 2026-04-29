@@ -234,7 +234,110 @@ def test_whitespace_only_returns_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# Round 7: dataclass shape
+# Round 7: punctuation cleanup after filler removal
+# ---------------------------------------------------------------------------
+
+
+def test_collapses_double_comma_after_filler_removal():
+    result = refine("fiz isso, tipo, e aí parei.")
+
+    assert ",," not in result.refined
+
+
+def test_strips_leading_comma_when_filler_starts_paragraph():
+    result = refine("tipo, vamos seguir.")
+
+    assert not result.refined.startswith(",")
+    assert "vamos" in result.refined
+
+
+def test_removes_empty_parens_left_by_paren_filler():
+    result = refine("(tipo) vamos seguir.")
+
+    assert "()" not in result.refined
+    assert "( )" not in result.refined
+    assert "vamos" in result.refined
+
+
+def test_capitalized_filler_treated_as_filler_v1():
+    """V1 deliberate choice: filler matching is case-insensitive.
+
+    Standalone capitalized `Tipo`, `Aí`, or `Né` is treated as filler.
+    Any proper-noun usage is recoverable from the verbatim original
+    block.
+    """
+    result = refine("Tipo é assim.")
+
+    refined_words = result.refined.split()
+    assert "Tipo" not in refined_words
+    assert "tipo" not in refined_words
+
+
+def test_all_caps_filler_treated_as_filler_v1():
+    result = refine("TIPO É ASSIM.")
+
+    refined_words = result.refined.split()
+    assert "TIPO" not in refined_words
+
+
+# ---------------------------------------------------------------------------
+# Round 8: segmentation edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_one_sentence_input_stays_single_paragraph():
+    result = refine("Apenas uma frase aqui.")
+
+    assert "\n\n" not in result.refined
+    assert len(result.refined.split("\n\n")) == 1
+
+
+def test_exactly_five_sentences_no_cap_split():
+    text = " ".join(f"Frase {i}." for i in range(1, 6))
+
+    result = refine(text)
+
+    paragraphs = result.refined.split("\n\n")
+    assert len(paragraphs) == 1
+    assert paragraphs[0].count(".") == 5
+
+
+def test_exactly_six_sentences_cap_splits_after_fifth():
+    text = " ".join(f"Frase {i}." for i in range(1, 7))
+
+    result = refine(text)
+
+    paragraphs = result.refined.split("\n\n")
+    assert len(paragraphs) == 2
+    assert paragraphs[0].count(".") == 5
+    assert paragraphs[1].count(".") == 1
+
+
+def test_every_sentence_starts_with_connective():
+    text = "então comecei. então parei. então pensei melhor."
+
+    result = refine(text)
+
+    paragraphs = result.refined.split("\n\n")
+    # First sentence has empty `current` so no break; subsequent two
+    # sentences each trigger a break, yielding three paragraphs.
+    assert len(paragraphs) == 3
+
+
+def test_mixed_existing_breaks_and_connective_splits():
+    text = (
+        "Primeira ideia. então pensei melhor.\n\n"
+        "Segunda parte. então comecei a escrever."
+    )
+
+    result = refine(text)
+
+    paragraphs = result.refined.split("\n\n")
+    assert len(paragraphs) == 4
+
+
+# ---------------------------------------------------------------------------
+# Round 9: dataclass shape
 # ---------------------------------------------------------------------------
 
 
