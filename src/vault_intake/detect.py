@@ -46,8 +46,21 @@ _SESSION_TURN_PATTERN = re.compile(
     r"^\s*(User|Assistant|Human|AI|ChatGPT)\s*:",
     re.IGNORECASE | re.MULTILINE,
 )
+_USER_SIDE_LABELS: frozenset[str] = frozenset({"user", "human"})
+_ASSISTANT_SIDE_LABELS: frozenset[str] = frozenset({"assistant", "ai", "chatgpt"})
+
 _MARKDOWN_HEADING_PATTERN = re.compile(r"^#{1,6}\s+\S", re.MULTILINE)
+_SETEXT_HEADING_PATTERN = re.compile(
+    r"^[^\n]+\n[=\-]{2,}\s*$",
+    re.MULTILINE,
+)
 _URL_PATTERN = re.compile(r"https?://\S+")
+
+# Types that already have explicit structure; they should not be sent
+# through Step 2 (Refine) even when long and unstructured-looking.
+_ALREADY_STRUCTURED: frozenset[ContentType] = frozenset(
+    {"session", "document", "reference"}
+)
 
 _CONTEXT_PHRASES: tuple[str, ...] = (
     "i decided",
@@ -67,10 +80,12 @@ _TRANSCRIPTION_CONNECTIVES: tuple[str, ...] = (
 )
 
 # When more than one type's signals fire, the type appearing earliest
-# in this tuple wins. Strictest signals first.
+# in this tuple wins. session leads because user/assistant turn markers
+# are the strictest structural signal (rare false positives) and Step 2
+# refinement would corrupt their structure.
 _TYPE_PRIORITY: tuple[ContentType, ...] = (
-    "transcription",
     "session",
+    "transcription",
     "prompt",
     "context",
     "document",
@@ -88,17 +103,21 @@ def detect_content_type(text: str) -> DetectionResult:
     lower = text.lower()
     word_count = len(text.split())
     has_markdown_headings = bool(_MARKDOWN_HEADING_PATTERN.search(text))
+    has_setext_headings = bool(_SETEXT_HEADING_PATTERN.search(text))
+    has_structural_headings = has_markdown_headings or has_setext_headings
     has_connectives = any(c in lower for c in _TRANSCRIPTION_CONNECTIVES)
 
     signal_map: dict[ContentType, list[str]] = {
         t: [] for t in _TYPE_PRIORITY
     }
 
-    if _SESSION_TURN_PATTERN.search(text):
+    if _is_dialogue(text):
         signal_map["session"].append("user_assistant_turns")
 
     if has_markdown_headings:
         signal_map["document"].append("markdown_headings")
+    if has_setext_headings:
+        signal_map["document"].append("setext_headings")
 
     if _URL_PATTERN.search(text):
         signal_map["reference"].append("url_present")
@@ -111,7 +130,7 @@ def detect_content_type(text: str) -> DetectionResult:
 
     if (
         word_count > TRANSCRIPTION_MIN_WORDS
-        and not has_markdown_headings
+        and not has_structural_headings
         and has_connectives
     ):
         signal_map["transcription"].append("long_unstructured_text")
@@ -124,19 +143,20 @@ def detect_content_type(text: str) -> DetectionResult:
             type="note",
             uncertain=False,
             signals=(),
-            refinement_applicable=_is_brain_dump_note(
+            refinement_applicable=_is_brain_dump(
                 word_count=word_count,
-                has_markdown_headings=has_markdown_headings,
+                has_structural_headings=has_structural_headings,
             ),
         )
 
     winner = detected_types[0]
     uncertain = len(detected_types) > 1
 
-    if winner == "transcription":
-        refinement_applicable = True
-    else:
-        refinement_applicable = False
+    refinement_applicable = _refinement_applies(
+        winner=winner,
+        word_count=word_count,
+        has_structural_headings=has_structural_headings,
+    )
 
     return DetectionResult(
         type=winner,
@@ -146,12 +166,53 @@ def detect_content_type(text: str) -> DetectionResult:
     )
 
 
-def _is_brain_dump_note(*, word_count: int, has_markdown_headings: bool) -> bool:
-    """Brain-dump note heuristic for `refinement_applicable`.
+def _is_dialogue(text: str) -> bool:
+    """Detect a real conversational structure.
 
-    A note is treated as a brain dump (worth refining) when it is long
-    enough to benefit from a readability pass and lacks any structural
-    scaffolding. Short notes, reminders, and well-structured snippets
-    skip Step 2.
+    Spec line 59 calls for "user/assistant turns," not a single
+    isolated label. Require at least one user-side and one
+    assistant-side turn marker so a stray quoted `User:` line in prose
+    does not get classified as a session.
     """
-    return word_count >= BRAIN_DUMP_MIN_WORDS and not has_markdown_headings
+    labels: set[str] = set()
+    for match in _SESSION_TURN_PATTERN.finditer(text):
+        labels.add(match.group(1).lower())
+    return bool(labels & _USER_SIDE_LABELS) and bool(
+        labels & _ASSISTANT_SIDE_LABELS
+    )
+
+
+def _is_brain_dump(*, word_count: int, has_structural_headings: bool) -> bool:
+    """Brain-dump heuristic gating Step 2 (Refine).
+
+    Long unstructured prose benefits from a readability pass; short
+    notes, reminders, and well-structured snippets skip Step 2.
+    """
+    return (
+        word_count >= BRAIN_DUMP_MIN_WORDS
+        and not has_structural_headings
+    )
+
+
+def _refinement_applies(
+    *,
+    winner: ContentType,
+    word_count: int,
+    has_structural_headings: bool,
+) -> bool:
+    """Whether Step 2 (Refine) should run for this detection result.
+
+    Always True for transcriptions per spec line 69. For non-already-
+    structured types (note, context, prompt), True when the input
+    looks like a brain dump (long and unstructured). Always False for
+    already-structured types (session, document, reference) so Step 2
+    cannot corrupt turn structure, headings, or external content.
+    """
+    if winner == "transcription":
+        return True
+    if winner in _ALREADY_STRUCTURED:
+        return False
+    return _is_brain_dump(
+        word_count=word_count,
+        has_structural_headings=has_structural_headings,
+    )

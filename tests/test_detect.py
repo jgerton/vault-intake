@@ -253,3 +253,142 @@ def test_content_type_literal_covers_seven_values():
     result = detect_content_type("anything")
 
     assert result.type in valid
+
+
+# ---------------------------------------------------------------------------
+# Round 4: Codex review follow-ups (session priority, false positives,
+# setext headings, brain-dump gating, more overlap pairs, word boundary)
+# ---------------------------------------------------------------------------
+
+
+def test_session_beats_transcription_on_long_chat_with_connectives():
+    """Per project decision 2026-04-29: session > transcription.
+
+    A long Claude.ai-style chat with informal Portuguese filler must
+    classify as session, not transcription, so Step 2 refinement does
+    not corrupt turn structure.
+    """
+    turn = (
+        "User: Então tipo eu queria entender como o detect funciona, e "
+        "tipo o que acontece se o input for muito longo aí com vários "
+        "sinais misturados, e tipo qual a prioridade entre eles.\n"
+        "Assistant: Tipo, a prioridade é configurada no priority tuple "
+        "e tipo o session vence o transcription porque os turn markers "
+        "são um sinal estrutural mais forte aí, e tipo o transcription "
+        "fica como fallback pra texto sem turns.\n"
+    )
+    text = turn * 6  # >300 words, dual-side turns, connectives, no markdown
+
+    result = detect_content_type(text)
+
+    assert result.type == "session"
+
+
+def test_does_not_classify_single_isolated_user_label_as_session():
+    text = "User: Reminder to ping Bob about the build status."
+
+    result = detect_content_type(text)
+
+    assert result.type != "session"
+
+
+def test_session_requires_both_user_and_assistant_markers():
+    text = (
+        "User: first item\n"
+        "User: second item\n"
+        "User: third item\n"
+    )
+
+    result = detect_content_type(text)
+
+    assert result.type != "session"
+
+
+def test_detects_document_from_setext_headings():
+    text = (
+        "Project Plan\n"
+        "============\n\n"
+        "The plan covers four phases.\n\n"
+        "Timeline\n"
+        "--------\n\n"
+        "Phase 1 starts Monday.\n"
+    )
+
+    result = detect_content_type(text)
+
+    assert result.type == "document"
+
+
+def test_refinement_applicable_for_long_unstructured_context_dump():
+    """Brain-dump gating runs independently of winner when the winning
+    type is not already structured (session/document/reference).
+    """
+    text = (
+        "I decided the plan is broken. My position is that we should "
+        "rewrite the spec from scratch. for client X we do Y but the "
+        "Y is no longer current and tipo nobody updated the doc, so I "
+        "decided it's worth tearing it down and rebuilding it. "
+    ) * 5  # context type, long, no markdown headings
+
+    result = detect_content_type(text)
+
+    assert result.type == "context"
+    assert result.refinement_applicable is True
+
+
+def test_transcription_threshold_triggers_above_300_words():
+    sentence = "tipo "
+    text = sentence * 301  # 301 tokens; >300 satisfied
+
+    result = detect_content_type(text)
+
+    assert result.type == "transcription"
+
+
+def test_transcription_threshold_does_not_trigger_at_exactly_300_words():
+    sentence = "tipo "
+    text = sentence * 300  # 300 tokens; >300 not satisfied
+
+    result = detect_content_type(text)
+
+    assert result.type != "transcription"
+
+
+def test_flags_uncertain_on_document_plus_reference_overlap():
+    text = (
+        "# Spec\n\n"
+        "## Overview\n\n"
+        "See https://example.com/standard for the upstream definition.\n\n"
+        "## Notes\n\n"
+        "Author Jane Doe documented the constraints in 2025.\n"
+    )
+
+    result = detect_content_type(text)
+
+    assert result.uncertain is True
+
+
+def test_flags_uncertain_on_document_plus_context_overlap():
+    text = (
+        "# Decision Log\n\n"
+        "## Background\n\n"
+        "I decided to keep the freemium tier capped at 100 members.\n\n"
+        "## Rationale\n\n"
+        "My position is that gated growth produces stronger engagement.\n"
+    )
+
+    result = detect_content_type(text)
+
+    assert result.uncertain is True
+
+
+def test_flags_uncertain_on_prompt_plus_reference_overlap():
+    text = (
+        "Send this to ChatGPT: review the article at "
+        "https://example.com/article by Jane Doe and surface every "
+        "claim that lacks a citation. Use this with the latest model."
+    )
+
+    result = detect_content_type(text)
+
+    assert result.uncertain is True
