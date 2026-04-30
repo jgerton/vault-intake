@@ -21,14 +21,55 @@ location at `~/.claude/skills/vault-intake/`.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "install_skill.py"
+
+
+def _load_install_module():
+    """Import scripts/install_skill.py as a module for in-process tests.
+
+    `scripts/` is not on `sys.path` per the project's pytest config (only
+    `src/` is), so we load by file location for the unit tests that need
+    `monkeypatch` against the script's `shutil` symbol. The module must be
+    registered in `sys.modules` BEFORE `exec_module` because the
+    `@dataclass` decorator on `InstallResult` looks up its module by name
+    via `sys.modules[cls.__module__].__dict__`; without registration the
+    decorator raises `AttributeError`.
+    """
+    spec = importlib.util.spec_from_file_location("install_skill", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def symlink_supported(tmp_path):
+    """Skip the test when the OS or user lacks symlink-creation permission.
+
+    Windows requires admin or Developer Mode for `os.symlink`; on a default
+    user account the call raises `OSError(WinError 1314)`. The library code
+    being exercised is platform-portable, so the test is best-effort: if
+    symlinks cannot be created in the fixture, the corresponding behavior
+    is still defended in production but verified manually elsewhere.
+    """
+    probe_src = tmp_path / "_symlink_probe_src"
+    probe_src.write_text("probe", encoding="utf-8")
+    probe_dst = tmp_path / "_symlink_probe_dst"
+    try:
+        probe_dst.symlink_to(probe_src)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks unsupported on this platform / user: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -305,3 +346,122 @@ class TestCLISurface:
         lower = result.stdout.lower()
         assert "installed" in lower
         assert str(dest).lower() in lower
+
+
+# ---------------------------------------------------------------------------
+# Symlink containment (the allowlist must remain a real boundary; symlinks
+# must not let outside-repo content leak into the install).
+# ---------------------------------------------------------------------------
+
+
+class TestSymlinkContainment:
+    def test_symlinked_top_level_file_rejected(self, tmp_path, symlink_supported):
+        source = _build_source(tmp_path)
+        outside = tmp_path / "outside_secret.md"
+        outside.write_text(
+            "# outside content; must not leak into the install\n",
+            encoding="utf-8",
+        )
+        # Replace SKILL.md with a symlink pointing at outside content.
+        (source / "SKILL.md").unlink()
+        (source / "SKILL.md").symlink_to(outside)
+        dest = tmp_path / "skills" / "vault-intake"
+
+        result = _run(["--source", str(source), "--dest", str(dest)])
+
+        assert result.returncode == 2, (result.returncode, result.stderr)
+        assert "symlink" in result.stderr.lower()
+        # And nothing should have been written at the destination.
+        assert not (dest / "SKILL.md").exists()
+
+    def test_symlink_inside_synced_dir_skipped(self, tmp_path, symlink_supported):
+        source = _build_source(tmp_path)
+        outside = tmp_path / "outside_secret.txt"
+        outside.write_text(
+            "secret content; must not leak into the install\n",
+            encoding="utf-8",
+        )
+        # Plant a symlink under scripts/ pointing at outside content.
+        (source / "scripts" / "leaked.py").symlink_to(outside)
+        dest = tmp_path / "skills" / "vault-intake"
+
+        result = _run(["--source", str(source), "--dest", str(dest)])
+
+        assert result.returncode == 0, result.stderr
+        # The symlink must NOT have been copied (neither as symlink nor as
+        # the dereferenced content).
+        leaked = dest / "scripts" / "leaked.py"
+        assert not leaked.exists(), (
+            "symlink under scripts/ leaked into install"
+        )
+        # The real allowlisted scripts files are still present.
+        assert (dest / "scripts" / "intake.py").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Containment contract: install owns the allowlist only. Non-allowlist
+# content placed at the destination root or in other subtrees is preserved
+# untouched (the install is not a hard mirror; user files are not nuked).
+# ---------------------------------------------------------------------------
+
+
+class TestNonAllowlistPreservation:
+    def test_user_file_at_dest_root_preserved_across_reinstall(self, tmp_path):
+        source = _build_source(tmp_path)
+        dest = tmp_path / "skills" / "vault-intake"
+        first = _run(["--source", str(source), "--dest", str(dest)])
+        assert first.returncode == 0, first.stderr
+
+        user_file = dest / "user_notes.md"
+        user_file.write_text("user content; not from install\n", encoding="utf-8")
+
+        second = _run(["--source", str(source), "--dest", str(dest)])
+        assert second.returncode == 0, second.stderr
+        assert user_file.read_text(encoding="utf-8") == (
+            "user content; not from install\n"
+        )
+
+    def test_user_dir_at_dest_root_preserved_across_reinstall(self, tmp_path):
+        source = _build_source(tmp_path)
+        dest = tmp_path / "skills" / "vault-intake"
+        first = _run(["--source", str(source), "--dest", str(dest)])
+        assert first.returncode == 0, first.stderr
+
+        # Stale dir from a hypothetical prior version OR user-placed content.
+        stale = dest / "tests"
+        stale.mkdir()
+        (stale / "old.py").write_text("# stale or user-placed\n", encoding="utf-8")
+
+        second = _run(["--source", str(source), "--dest", str(dest)])
+        assert second.returncode == 0, second.stderr
+        assert stale.exists()
+        assert (stale / "old.py").read_text(encoding="utf-8") == (
+            "# stale or user-placed\n"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Exit code 4 (destination write error). Exercised in-process via
+# `monkeypatch` rather than subprocess so we can simulate the OSError
+# branch deterministically.
+# ---------------------------------------------------------------------------
+
+
+class TestExitCodeFour:
+    def test_oserror_during_copy_returns_exit_4(self, tmp_path, monkeypatch, capsys):
+        source = _build_source(tmp_path)
+        dest = tmp_path / "skills" / "vault-intake"
+        install_skill = _load_install_module()
+
+        def boom(_src, _dst, *_a, **_kw):
+            raise PermissionError("simulated permission denied at copy time")
+
+        monkeypatch.setattr(install_skill.shutil, "copy2", boom)
+        rc = install_skill.main(
+            ["--source", str(source), "--dest", str(dest)]
+        )
+
+        assert rc == 4
+        captured = capsys.readouterr()
+        assert "install write error" in captured.err.lower()
+        assert "permission denied" in captured.err.lower()

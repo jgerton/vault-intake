@@ -9,13 +9,26 @@ Allowlist (copied):
     SKILL.md
     pyproject.toml
     uv.lock
-    src/vault_intake/    (recursive; `__pycache__` excluded)
-    scripts/             (recursive; `__pycache__` excluded)
+    src/vault_intake/    (recursive; `__pycache__` and symlinks excluded)
+    scripts/             (recursive; `__pycache__` and symlinks excluded)
 
 Anything outside the allowlist (tests/, references/, .git/, .venv/, stray
-top-level files) is NOT copied. The destination is the source of truth for
-the live skill; the dev repo is the source of truth for the install. Re-run
-to sync; existing files at the destination are overwritten.
+top-level files) is NOT copied.
+
+Containment contract:
+- Symlinks are refused at the top-level allowlist (a symlinked SKILL.md
+  rejects with exit 2) and skipped inside synced dirs (so an accidental or
+  malicious symlink under `scripts/` cannot pull outside-repo content into
+  the install).
+- The install owns the allowlist only: the entire `src/vault_intake/` and
+  `scripts/` subtrees at the destination are replaced on each run (so
+  removed dev files are reflected at the install), plus the named top-level
+  files. Files OUTSIDE the allowlist at the destination root or in other
+  subtrees are preserved untouched (the install does not nuke user-placed
+  content at the skill directory).
+
+Idempotent: re-run to sync after dev changes; existing allowlisted files at
+the destination are overwritten in place.
 
 Usage:
     uv run scripts/install_skill.py
@@ -49,30 +62,58 @@ class InstallResult:
     dest: Path
 
 
-def _ignore_excluded(_dir: str, names: list[str]) -> set[str]:
-    return {name for name in names if name in EXCLUDE_NAMES}
+def _ignore_excluded(directory: str, names: list[str]) -> set[str]:
+    """`shutil.copytree` ignore callback.
+
+    Excludes `__pycache__` directories and any entry that is itself a
+    symlink (regardless of target). Skipping symlinks here is a containment
+    defense: `shutil.copytree(symlinks=False)` would otherwise dereference a
+    symlink under `scripts/` or `src/vault_intake/` and copy outside-repo
+    content into the install.
+    """
+    ignored: set[str] = set()
+    for name in names:
+        if name in EXCLUDE_NAMES:
+            ignored.add(name)
+            continue
+        if (Path(directory) / name).is_symlink():
+            ignored.add(name)
+    return ignored
 
 
 def install(source: Path, dest: Path) -> InstallResult:
     """Copy the allowlisted artifacts from `source` to `dest`.
 
     Validates the source layout up-front so a missing required file produces
-    a clear error before anything is written. Replaces the directory subtrees
-    in `dest` so stale files inside `src/vault_intake/` or `scripts/` from a
-    prior install do not linger.
+    a clear error before anything is written. Rejects symlinked top-level
+    allowlist entries so `Path.is_file()` (which dereferences symlinks)
+    cannot let a symlinked SKILL.md leak outside-repo content. Replaces the
+    directory subtrees in `dest` so stale files inside `src/vault_intake/`
+    or `scripts/` from a prior install do not linger; non-allowlist content
+    elsewhere at `dest` is left untouched.
     """
     if not source.is_dir():
         raise FileNotFoundError(f"source not found or not a directory: {source}")
 
     for name in SYNC_FILES:
-        if not (source / name).is_file():
+        candidate = source / name
+        if candidate.is_symlink():
             raise FileNotFoundError(
-                f"required source file missing: {(source / name)}"
+                f"required source file is a symlink, refusing: {candidate}"
+            )
+        if not candidate.is_file():
+            raise FileNotFoundError(
+                f"required source file missing: {candidate}"
             )
     for rel in SYNC_DIRS:
-        if not (source / rel).is_dir():
+        candidate = source / rel
+        if candidate.is_symlink():
             raise FileNotFoundError(
-                f"required source directory missing: {(source / rel)}"
+                f"required source directory is a symlink, refusing: {candidate}"
+            )
+        if not candidate.is_dir():
+            raise FileNotFoundError(
+                f"required source directory missing: {candidate}"
             )
 
     dest.mkdir(parents=True, exist_ok=True)

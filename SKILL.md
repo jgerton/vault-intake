@@ -39,7 +39,7 @@ Flags:
 
 - `--vault PATH` (env fallback `VAULT_INTAKE_VAULT_PATH`)
 - `--input PATH` (explicit file wins over piped stdin; TTY stdin without `--input` refuses with exit 2)
-- `--source-type {paste,url,file,email,...}` (validated against `SourceType` Literal)
+- `--source-type {vault,paste,stdin,api,external_cli,other}` (validated against the `SourceType` Literal in `frontmatter.py`)
 - `--source-uri TEXT`
 - `--title TEXT` (overrides the title heuristic; rejected if empty or whitespace)
 - `--yes` (pre-approve writes; spec safety rule 5 documented opt-in)
