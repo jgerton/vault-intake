@@ -615,6 +615,22 @@ def test_iso_date_alone_fires_gate_as_deadline():
     assert "date" in result.signals_detected
 
 
+def test_mixed_deictic_and_deadline_annotates_deadline():
+    # When a sentence contains both a deictic (today/tomorrow/tonight)
+    # and a deadline-bearing match, the `when` annotation should surface
+    # the deadline because it carries higher information than the
+    # deictic. Order in the sentence does not matter.
+    result = extract_next_actions(
+        "Send the deck today by Friday.",
+        _make_config(),
+    )
+
+    assert result.gate_fired is True
+    assert result.proposals[0].when is not None
+    assert "Friday" in result.proposals[0].when
+    assert result.proposals[0].when.lower().startswith("by ")
+
+
 def test_descriptive_going_to_does_not_fire_gate():
     # Bare "going to" is too broad: matches descriptive predictions
     # like "is going to change" with no action intent. Future-intent

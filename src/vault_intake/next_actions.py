@@ -178,15 +178,6 @@ _DEADLINE_DATE_PATTERNS: tuple[re.Pattern[str], ...] = (
     _IN_N_PERIOD_RE,
 )
 
-# All date patterns in priority order for `when` annotation extraction.
-# Deadline patterns are checked first so they win on sentences that
-# contain both (e.g., "by Friday today" should annotate "by Friday").
-_DATE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    *_DEADLINE_DATE_PATTERNS,
-    _DEICTIC_DATE_RE,
-)
-
-
 # Decision-point phrases. "TBD" is matched case-insensitive but with
 # word boundaries so it does not match inside other words.
 _DECISION_POINT_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -365,8 +356,23 @@ def _is_imperative(sentence: str) -> bool:
 
 
 def _extract_date(sentence: str) -> str | None:
+    # Prefer deadline-bearing matches over deictic ones when a sentence
+    # contains both. Deadlines carry higher information for the `when`
+    # annotation, so a sentence like "Today send the deck by Friday."
+    # surfaces "by Friday", not "Today", regardless of position. Deictic
+    # falls back only when no deadline pattern matches.
+    deadline = _earliest_match(_DEADLINE_DATE_PATTERNS, sentence)
+    if deadline is not None:
+        return deadline
+    deictic_match = _DEICTIC_DATE_RE.search(sentence)
+    return deictic_match.group(0) if deictic_match else None
+
+
+def _earliest_match(
+    patterns: tuple[re.Pattern[str], ...], sentence: str
+) -> str | None:
     earliest: tuple[int, str] | None = None
-    for pattern in _DATE_PATTERNS:
+    for pattern in patterns:
         match = pattern.search(sentence)
         if match is None:
             continue
