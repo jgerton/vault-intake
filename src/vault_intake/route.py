@@ -127,70 +127,86 @@ def _resolve_fixed_domains_destination(
     d_type = detection.type
     p_cat = para.category
 
+    # Routing key: use frontmatter.type when it carries semantic info, but
+    # recover detection.type when Step 5's PARA-project override
+    # collapsed the original session/context/note/prompt distinction to
+    # frontmatter.type="project". This keeps prompt+project routing to
+    # prompts/ (spec line 196 "prompt | any | prompts/") rather than
+    # mis-routing to sessions/+link.
+    effective_type = d_type if f_type == "project" else f_type
+
     # Insight/workflow/prompt route by type, PARA-independent.
-    if f_type in _USER_SET_FOLDERS:
-        folder = _USER_SET_FOLDERS[f_type]
+    if effective_type in _USER_SET_FOLDERS:
+        folder = _USER_SET_FOLDERS[effective_type]
         return (
             vault_path / folder,
             None,
             False,
-            f"type={f_type}, dest={folder}/",
+            f"type={effective_type}, dest={folder}/",
         )
 
     # PARA=archive: route to canonical default folder; outer caller
     # sets archive_flagged.
     if p_cat == "archive":
-        folder = _ARCHIVE_PROXY_FOLDERS.get(f_type, _INBOX_NAME)
+        folder = _ARCHIVE_PROXY_FOLDERS.get(effective_type, _INBOX_NAME)
         return (
             vault_path / folder,
             None,
             False,
-            f"type={f_type}, para=archive, would-be={folder}/",
+            f"type={effective_type}, para=archive, would-be={folder}/",
         )
 
-    # PARA-project override fired: frontmatter.type=project. Use
-    # detection.type to disambiguate context-vs-session-vs-note.
-    if f_type == "project":
+    # PARA-project routing: use effective_type to disambiguate
+    # context-vs-session-vs-note. Other types (reference, document,
+    # transcription) with project PARA are unlisted in the spec; fall
+    # back to _inbox/.
+    if p_cat == "project":
         slug = para.project_slug or frontmatter.project
         if not slug:
             return (
                 vault_path / _INBOX_NAME,
                 None,
                 False,
-                f"type=project missing project_slug, dest={_INBOX_NAME}/",
+                f"type={effective_type} para=project missing project_slug, dest={_INBOX_NAME}/",
             )
         project_file = vault_path / "projects" / f"{slug}.md"
-        if d_type == "context":
+        if effective_type == "context":
             return (
                 project_file,
                 project_file,
                 True,
                 f"type=context, para=project, dest=projects/{slug}.md (section update)",
             )
-        # session, note, transcription, document, reference, prompt
-        # all map to sessions/ + project link per spec line 192/201.
+        if effective_type in {"session", "note"}:
+            return (
+                vault_path / "sessions",
+                project_file,
+                False,
+                f"type={effective_type}, para=project, dest=sessions/ + link",
+            )
         return (
-            vault_path / "sessions",
-            project_file,
+            vault_path / _INBOX_NAME,
+            None,
             False,
-            f"detection_type={d_type}, para=project, dest=sessions/ + link",
+            f"unlisted combo type={effective_type}, para=project, dest={_INBOX_NAME}/",
         )
 
-    # Spec table rows for session/context/reference/note.
-    table_dest = _SPEC_TABLE.get((f_type, p_cat))
+    # Spec table rows for session/context/reference/note with non-project
+    # PARA categories.
+    table_dest = _SPEC_TABLE.get((effective_type, p_cat))
     if table_dest is not None:
         return (
             vault_path / table_dest,
             None,
             False,
-            f"type={f_type}, para={p_cat}, dest={table_dest}/",
+            f"type={effective_type}, para={p_cat}, dest={table_dest}/",
         )
 
     return (
         vault_path / _INBOX_NAME,
         None,
         False,
-        f"unlisted combo type={f_type}, para={p_cat}, dest={_INBOX_NAME}/",
+        f"unlisted combo type={effective_type}, para={p_cat}, dest={_INBOX_NAME}/",
     )
 
 

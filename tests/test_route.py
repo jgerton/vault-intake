@@ -333,6 +333,82 @@ def test_unlisted_combo_falls_back_to_inbox(tmp_path):
     assert result.inbox_fallback is True
 
 
+def test_unlisted_session_resource_falls_back_to_inbox(tmp_path):
+    # session + resource is not in the spec's table.
+    config = _make_config(vault_path=tmp_path)
+    result = route(
+        detection=_make_detection("session"),
+        classification=_make_classification(),
+        para=_make_para(category="resource"),
+        frontmatter=_make_frontmatter(note_type="session"),
+        config=config,
+    )
+    assert result.destination == tmp_path / "_inbox"
+    assert result.inbox_fallback is True
+
+
+# ---------------------------------------------------------------------------
+# Round 4b: PARA-project override interacts correctly with user-set types
+# (Codex R-1: prompt+project must stay in prompts/, not sessions/+link;
+# reference+project is unlisted and must fall back to _inbox/.)
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_with_para_project_override_routes_to_prompts(tmp_path):
+    # Step 5's PARA-project override sets frontmatter.type=project
+    # unconditionally. Step 8 must recover the original detection.type
+    # ("prompt") and route to prompts/, NOT to sessions/+link, since
+    # spec line 196 says "prompt | any | prompts/".
+    config = _make_config(vault_path=tmp_path)
+    result = route(
+        detection=_make_detection("prompt"),
+        classification=_make_classification(),
+        para=_make_para(category="project", project_slug="launch-redesign"),
+        frontmatter=_make_frontmatter(note_type="project", project="launch-redesign"),
+        config=config,
+    )
+    assert result.destination == tmp_path / "prompts"
+    assert result.project_link_target is None
+    assert result.is_section_update is False
+    assert result.archive_flagged is False
+    assert result.inbox_fallback is False
+
+
+def test_reference_with_para_project_override_falls_back_to_inbox(tmp_path):
+    # reference + project is not in the spec's table. After Step 5's
+    # PARA-project override, Step 8 sees frontmatter.type=project,
+    # detection.type=reference. It must fall back to _inbox/, not
+    # mis-route to sessions/+link.
+    config = _make_config(vault_path=tmp_path)
+    result = route(
+        detection=_make_detection("reference"),
+        classification=_make_classification(),
+        para=_make_para(category="project", project_slug="launch-redesign"),
+        frontmatter=_make_frontmatter(note_type="project", project="launch-redesign"),
+        config=config,
+    )
+    assert result.destination == tmp_path / "_inbox"
+    assert result.inbox_fallback is True
+    assert result.project_link_target is None
+
+
+def test_user_set_insight_with_para_project_routes_to_insights(tmp_path):
+    # Orchestrator may override frontmatter.type to "insight" at user
+    # confirmation, even when para.category="project". The user's
+    # explicit type wins; insights always route to insights/ per spec
+    # line 194.
+    config = _make_config(vault_path=tmp_path)
+    result = route(
+        detection=_make_detection("note"),
+        classification=_make_classification(),
+        para=_make_para(category="project", project_slug="launch-redesign"),
+        frontmatter=_make_frontmatter(note_type="insight"),
+        config=config,
+    )
+    assert result.destination == tmp_path / "insights"
+    assert result.project_link_target is None
+
+
 # ---------------------------------------------------------------------------
 # Round 5: emergent mode - exact theme folder match
 # ---------------------------------------------------------------------------
