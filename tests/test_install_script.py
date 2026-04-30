@@ -399,6 +399,68 @@ class TestSymlinkContainment:
 
 
 # ---------------------------------------------------------------------------
+# Destination-side symlink containment: a pre-existing symlink at an
+# allowlisted destination path must be replaced (the symlink itself
+# unlinked), not written through to its outside target. Otherwise a
+# planted `dest/SKILL.md -> /etc/passwd` would let `copy2` overwrite the
+# target the next time install runs.
+# ---------------------------------------------------------------------------
+
+
+class TestDestinationSymlinkContainment:
+    def test_dest_top_level_file_symlink_replaced_not_followed(
+        self, tmp_path, symlink_supported
+    ):
+        source = _build_source(tmp_path)
+        dest = tmp_path / "skills" / "vault-intake"
+        dest.mkdir(parents=True)
+        outside = tmp_path / "outside_target.md"
+        outside.write_text("OUTSIDE TARGET CONTENT\n", encoding="utf-8")
+        # Plant a symlink at the allowlisted destination path.
+        (dest / "SKILL.md").symlink_to(outside)
+
+        result = _run(["--source", str(source), "--dest", str(dest)])
+
+        assert result.returncode == 0, result.stderr
+        # The dest path should now be a real file with source content.
+        assert not (dest / "SKILL.md").is_symlink()
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == (
+            source / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        # The outside target must NOT have been overwritten.
+        assert outside.read_text(encoding="utf-8") == "OUTSIDE TARGET CONTENT\n"
+
+    def test_dest_synced_dir_symlink_replaced_not_recursed(
+        self, tmp_path, symlink_supported
+    ):
+        source = _build_source(tmp_path)
+        dest = tmp_path / "skills" / "vault-intake"
+        dest.mkdir(parents=True)
+        outside_dir = tmp_path / "outside_dir"
+        outside_dir.mkdir()
+        (outside_dir / "outside_file.txt").write_text(
+            "OUTSIDE DIR CONTENT\n", encoding="utf-8"
+        )
+        # Plant a symlinked directory at the allowlisted destination path.
+        (dest / "scripts").symlink_to(outside_dir, target_is_directory=True)
+
+        result = _run(["--source", str(source), "--dest", str(dest)])
+
+        assert result.returncode == 0, result.stderr
+        # dest/scripts should now be a real directory (symlink unlinked).
+        assert not (dest / "scripts").is_symlink()
+        assert (dest / "scripts").is_dir()
+        # outside_dir contents must NOT have been touched (no rmtree
+        # following the symlink and deleting the outside file).
+        assert outside_dir.is_dir()
+        assert (outside_dir / "outside_file.txt").read_text(
+            encoding="utf-8"
+        ) == "OUTSIDE DIR CONTENT\n"
+        # Real allowlisted scripts content is now present at dest.
+        assert (dest / "scripts" / "intake.py").is_file()
+
+
+# ---------------------------------------------------------------------------
 # Containment contract: install owns the allowlist only. Non-allowlist
 # content placed at the destination root or in other subtrees is preserved
 # untouched (the install is not a hard mirror; user files are not nuked).

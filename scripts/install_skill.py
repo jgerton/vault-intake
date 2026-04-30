@@ -121,13 +121,26 @@ def install(source: Path, dest: Path) -> InstallResult:
     dirs_synced = 0
 
     for name in SYNC_FILES:
-        shutil.copy2(source / name, dest / name)
+        dst_path = dest / name
+        # If the destination entry is itself a symlink, unlink it first so
+        # `copy2` writes a fresh regular file at the install location rather
+        # than dereferencing the symlink and clobbering its outside target.
+        # `Path.unlink()` on a symlink removes the symlink only; the target
+        # is untouched.
+        if dst_path.is_symlink():
+            dst_path.unlink()
+        shutil.copy2(source / name, dst_path)
         files_copied += 1
 
     for rel in SYNC_DIRS:
         src_dir = source / rel
         dst_dir = dest / rel
-        if dst_dir.exists():
+        # Same defense for synced directories: a symlinked `dest/scripts`
+        # must be replaced as a symlink, not recursed into and rmtree'd
+        # (which could delete content at the symlink's outside target).
+        if dst_dir.is_symlink():
+            dst_dir.unlink()
+        elif dst_dir.exists():
             shutil.rmtree(dst_dir)
         shutil.copytree(src_dir, dst_dir, ignore=_ignore_excluded)
         dirs_synced += 1
