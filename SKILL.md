@@ -326,7 +326,7 @@ Step 6 produces ranked wikilink proposals for the new note's "Related" section p
 
 **fixed_domains track (v1, implemented):**
 
-Walks `vault_path` recursively. Skips dot-prefixed directories (`.git`, `.obsidian`) and the `_indexes/` folder (the v1 source strategy reads real notes' frontmatter rather than curated index files). Skips files that fail to read or fail to parse as YAML frontmatter; treats them as having no domain.
+Walks `vault_path` recursively. Skips dot-prefixed directories (`.git`, `.obsidian`) and the `_indexes/` folder (the v1 source strategy reads real notes' frontmatter rather than curated index files). Walk order is sorted (dirs and files) so the audit trail is deterministic across platforms. Files that fail to read (OSError, UnicodeDecodeError) are skipped entirely; files that read but fail YAML frontmatter parse are retained with no domain and the filename stem as label, so concept-overlap can still fire on the stem. Files are read with `utf-8-sig` so a leading UTF-8 BOM does not block frontmatter detection.
 
 Weighting (highest to lowest, build spec lines 163-167):
 

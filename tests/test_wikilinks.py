@@ -665,3 +665,134 @@ def test_project_link_source_path_none_when_project_dir_missing(tmp_path: Path) 
     project = next(w for w in result.proposals if w.target == "ghost-project")
     assert project.weight == 3
     assert project.source_path is None
+
+
+def test_project_source_disappears_between_resolve_and_stat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T1: TOCTOU race where the resolved project path fails to stat.
+
+    Patches the resolver to return a path that does not exist so the
+    real `stat()` raises `FileNotFoundError`; the function must
+    swallow the OSError and fall back to `mtime=0.0` rather than
+    crashing.
+    """
+    ghost = tmp_path / "projects" / "ghost.md"
+    monkeypatch.setattr(
+        "vault_intake.wikilinks._resolve_project_source",
+        lambda vault_path, slug: ghost,
+    )
+
+    config = _make_config(tmp_path)
+    para = _make_para(category="project", project_slug="ghost")
+
+    result = generate_wikilinks(
+        text="anything",
+        classification=_make_classification(primary="ops"),
+        para=para,
+        config=config,
+    )
+
+    project = next(w for w in result.proposals if w.target == "ghost")
+    assert project.weight == 3
+    assert project.source_path == ghost
+
+
+def test_bom_prefixed_markdown_frontmatter_is_parsed(tmp_path: Path) -> None:
+    """T2: BOM-prefixed notes parse frontmatter correctly.
+
+    Editors on Windows occasionally save UTF-8 with BOM. The reader
+    must recognize the leading `---` fence even when a BOM precedes it.
+    """
+    note = tmp_path / "insights" / "bom-note.md"
+    note.parent.mkdir()
+    body = (
+        "﻿---\n"
+        'title: "BOM brand note"\n'
+        "domain: branding\n"
+        "---\n\n"
+        "body"
+    )
+    note.write_bytes(body.encode("utf-8"))
+
+    config = _make_config(tmp_path)
+    classification = _make_classification(primary="ops", secondary=("branding",))
+
+    result = generate_wikilinks(
+        text="ops body",
+        classification=classification,
+        para=_make_para(),
+        config=config,
+    )
+
+    targets = [w.target for w in result.proposals]
+    assert "BOM brand note" in targets
+    bom = next(w for w in result.proposals if w.target == "BOM brand note")
+    assert bom.weight == 4
+
+
+def test_dedupe_deterministic_when_weight_and_mtime_tie(tmp_path: Path) -> None:
+    """T3: With weight and mtime tied, dedupe picks the lexicographically
+    smaller source path (mirrors the final-sort tiebreak).
+    """
+    a = _write_note(
+        tmp_path / "insights" / "alpha.md",
+        title="Same target",
+        domain="branding",
+    )
+    b = _write_note(
+        tmp_path / "insights" / "beta.md",
+        title="Same target",
+        domain="branding",
+    )
+    same = time.time()
+    os.utime(a, (same, same))
+    os.utime(b, (same, same))
+
+    config = _make_config(tmp_path)
+    classification = _make_classification(primary="ops", secondary=("branding",))
+
+    result = generate_wikilinks(
+        text="ops body",
+        classification=classification,
+        para=_make_para(),
+        config=config,
+    )
+
+    same_target = [w for w in result.proposals if w.target == "Same target"]
+    assert len(same_target) == 1
+    assert same_target[0].source_path == a
+
+
+def test_malformed_frontmatter_falls_back_to_filename_stem(tmp_path: Path) -> None:
+    """T4: When YAML parsing fails, the note is retained with no domain
+    and the filename stem as label (rather than being skipped).
+    """
+    note = tmp_path / "insights" / "process-overlap-stem.md"
+    note.parent.mkdir()
+    note.write_text(
+        "---\n"
+        "title: [unclosed flow sequence\n"
+        "domain: branding\n"
+        "---\n"
+        "body",
+        encoding="utf-8",
+    )
+
+    config = _make_config(tmp_path)
+    classification = _make_classification(primary="ops", secondary=("branding",))
+
+    result = generate_wikilinks(
+        text="Notes on the overlap process for the stem refactor.",
+        classification=classification,
+        para=_make_para(),
+        config=config,
+    )
+
+    cross = [w for w in result.proposals if w.weight == 4]
+    assert cross == []
+    targets = [w.target for w in result.proposals]
+    assert "process-overlap-stem" in targets
+    overlap = next(w for w in result.proposals if w.target == "process-overlap-stem")
+    assert overlap.weight == 2

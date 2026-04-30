@@ -167,7 +167,13 @@ def generate_wikilinks(
     if para.category == "project" and para.project_slug:
         slug = para.project_slug
         source = _resolve_project_source(config.vault_path, slug)
-        mtime = source.stat().st_mtime if source is not None else 0.0
+        if source is None:
+            mtime = 0.0
+        else:
+            try:
+                mtime = source.stat().st_mtime
+            except OSError:
+                mtime = 0.0
         project = _Candidate(
             target=slug,
             weight=3,
@@ -201,7 +207,7 @@ def generate_wikilinks(
 
     sorted_candidates = sorted(
         candidates.values(),
-        key=_sort_key,
+        key=_dedupe_priority,
     )
 
     proposals = tuple(
@@ -221,11 +227,27 @@ def generate_wikilinks(
     )
 
 
-def _sort_key(c: _Candidate) -> tuple[int, float, str]:
-    # Weight desc (negate), recency desc (negate), then deterministic
-    # tiebreak by source path string. Backlog markers (source_path is
-    # None) fall to the back of their weight band by sorting on a
-    # high-Unicode sentinel keyed by target.
+def _upsert(candidates: dict[str, _Candidate], new: _Candidate) -> None:
+    existing = candidates.get(new.target)
+    if existing is None:
+        candidates[new.target] = new
+        return
+    # Total ordering for dedupe: weight desc, mtime desc, source path
+    # asc. The third key resolves the otherwise-nondeterministic case
+    # where two distinct files yield the same target with identical
+    # weight and mtime; without it, os.walk's filesystem-order yield
+    # would be the silent tiebreaker.
+    new_key = _dedupe_priority(new)
+    existing_key = _dedupe_priority(existing)
+    if new_key < existing_key:
+        candidates[new.target] = new
+
+
+def _dedupe_priority(c: _Candidate) -> tuple[int, float, str]:
+    # Single ordering used by both `_upsert` (for dedupe selection) and
+    # the final proposal sort. Backlog markers have no source_path; a
+    # high-Unicode sentinel keyed by target sorts them after any path-
+    # bearing candidate within the same weight band.
     if c.source_path is None:
         path_key = "￿" + c.target
     else:
@@ -233,27 +255,20 @@ def _sort_key(c: _Candidate) -> tuple[int, float, str]:
     return (-c.weight, -c.mtime, path_key)
 
 
-def _upsert(candidates: dict[str, _Candidate], new: _Candidate) -> None:
-    existing = candidates.get(new.target)
-    if existing is None:
-        candidates[new.target] = new
-        return
-    if new.weight > existing.weight:
-        candidates[new.target] = new
-        return
-    if new.weight == existing.weight and new.mtime > existing.mtime:
-        candidates[new.target] = new
-
-
 def _walk_vault(vault_path: Path) -> Iterable[_VaultNote]:
     if not vault_path.is_dir():
         return
     for root, dirs, files in os.walk(vault_path):
-        dirs[:] = [
+        # Sort dirs in place so the recursion order is deterministic
+        # across platforms; os.walk's default order is filesystem-
+        # dependent and would surface as flake under cross-platform
+        # snapshot tests. Filter is applied after sorting to skip dot
+        # dirs and `_indexes/`.
+        dirs[:] = sorted(
             d for d in dirs
             if not d.startswith(".") and d not in _SKIP_DIRS
-        ]
-        for fname in files:
+        )
+        for fname in sorted(files):
             if fname.startswith(".") or not fname.endswith(".md"):
                 continue
             path = Path(root) / fname
@@ -264,7 +279,11 @@ def _walk_vault(vault_path: Path) -> Iterable[_VaultNote]:
 
 def _read_note(path: Path) -> _VaultNote | None:
     try:
-        text = path.read_text(encoding="utf-8")
+        # `utf-8-sig` strips a UTF-8 BOM if present so the leading `---`
+        # frontmatter fence is recognized on notes saved by editors that
+        # add a BOM (common on Windows). Plain UTF-8 inputs decode the
+        # same way under this codec.
+        text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return None
     fm = _parse_frontmatter(text)
