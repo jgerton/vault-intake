@@ -4,14 +4,22 @@ Per build spec lines 228-243 the skill completes by presenting a
 structured summary covering the source path, type, domain or theme,
 PARA category (in fixed_domains/para mode only), destination, wikilink
 count, next-step count, NotebookLM source ID or skip status, and
-whether `## Captura original` was preserved. The orchestrator produces
-all of that via a single `run_intake(input_text, config, ...)` call
-that returns a frozen `IntakeRun`.
+whether `## Captura original` was preserved.
 
-This module is dry-run only in v1: `IntakeRun.written_path` is always
-None. A separate `confirm_and_write` function (next commit) handles the
-actual file write, the live Step 9 invocation against the written path,
-and the corresponding `frontmatter.source_id` update.
+Two entrypoints, locked 2026-04-30:
+
+- `run_intake(input_text, config, ...) -> IntakeRun`: dry-run pass that
+  produces all of the spec's summary content without touching the
+  filesystem. `IntakeRun.written_path` is always None on this path.
+- `confirm_and_write(intake_run, config, ...) -> IntakeRun`: post-
+  confirmation entrypoint that performs the actual atomic file write,
+  re-invokes Step 9 against the written path, mutates frontmatter on a
+  non-None source_id, and re-writes atomically. Section-update routes
+  (context+project) append to the existing project hub instead.
+
+The CLI wrapper at `scripts/intake.py` is the explicit-confirmation
+surface for spec safety rule 5; both entrypoints assume the caller has
+already confirmed.
 
 Pipeline ordering and gating, locked 2026-04-30:
 

@@ -327,6 +327,120 @@ class TestCollision:
         assert target.exists()
         assert "Branding" in target.read_text(encoding="utf-8")
 
+    def test_interactive_collision_overwrite_branch(self, tmp_path):
+        """Interactive flow: pre-create the file, then run without
+        `--yes` and answer write-confirmation `y` then collision-prompt
+        `o`. The wrapper must overwrite and exit 0.
+        """
+        vault = _build_vault(tmp_path)
+        first = _run(
+            ["--vault", str(vault), "--yes", "--title", "duplicate"],
+            stdin=_OPS_INPUT,
+        )
+        assert first.returncode == 0, first.stderr
+
+        input_file = tmp_path / "input.md"
+        input_file.write_text(
+            "# Different content\n\nBranding work on visual identity launch.\n",
+            encoding="utf-8",
+        )
+        result = _run(
+            [
+                "--vault", str(vault),
+                "--input", str(input_file),
+                "--title", "duplicate",
+            ],
+            # write-confirmation `y`, collision-prompt `o`
+            stdin="y\no\n",
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        target = vault / "sessions" / "duplicate.md"
+        assert "Branding" in target.read_text(encoding="utf-8")
+
+    def test_interactive_collision_rename_branch(self, tmp_path):
+        """Interactive flow: pre-create the file, then run without
+        `--yes` and answer write-confirmation `y` then collision-prompt
+        `r`. The wrapper must auto-rename to `{title}-2.md` and exit 0.
+        """
+        vault = _build_vault(tmp_path)
+        first = _run(
+            ["--vault", str(vault), "--yes", "--title", "duplicate"],
+            stdin=_OPS_INPUT,
+        )
+        assert first.returncode == 0, first.stderr
+
+        input_file = tmp_path / "input.md"
+        input_file.write_text(_OPS_INPUT, encoding="utf-8")
+        result = _run(
+            [
+                "--vault", str(vault),
+                "--input", str(input_file),
+                "--title", "duplicate",
+            ],
+            stdin="y\nr\n",
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        # Original file untouched; renamed file present.
+        assert (vault / "sessions" / "duplicate.md").exists()
+        assert (vault / "sessions" / "duplicate-2.md").exists()
+
+    def test_interactive_collision_abort_branch(self, tmp_path):
+        """Interactive flow: pre-create, run interactive, answer `y`
+        for write then `a` for collision-prompt. Wrapper exits 1
+        (user aborted) and leaves the existing file untouched.
+        """
+        vault = _build_vault(tmp_path)
+        first = _run(
+            ["--vault", str(vault), "--yes", "--title", "duplicate"],
+            stdin=_OPS_INPUT,
+        )
+        assert first.returncode == 0, first.stderr
+        target = vault / "sessions" / "duplicate.md"
+        original_text = target.read_text(encoding="utf-8")
+
+        input_file = tmp_path / "input.md"
+        input_file.write_text(
+            "# Wholly different content for the abort test.\n\n"
+            "Branding work on visual identity launch.\n",
+            encoding="utf-8",
+        )
+        result = _run(
+            [
+                "--vault", str(vault),
+                "--input", str(input_file),
+                "--title", "duplicate",
+            ],
+            stdin="y\na\n",
+        )
+        assert result.returncode == 1, (result.stdout, result.stderr)
+        # Original file content preserved.
+        assert target.read_text(encoding="utf-8") == original_text
+
+
+# ---------------------------------------------------------------------------
+# --title validation
+# ---------------------------------------------------------------------------
+
+
+class TestTitleValidation:
+    def test_empty_title_exits_2(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        result = _run(
+            ["--vault", str(vault), "--yes", "--title", ""],
+            stdin=_OPS_INPUT,
+        )
+        assert result.returncode == 2
+        assert "title" in result.stderr.lower()
+
+    def test_whitespace_title_exits_2(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        result = _run(
+            ["--vault", str(vault), "--yes", "--title", "   "],
+            stdin=_OPS_INPUT,
+        )
+        assert result.returncode == 2
+        assert "title" in result.stderr.lower()
+
 
 # ---------------------------------------------------------------------------
 # Abort handling: EOF on stdin during prompt acts as user abort

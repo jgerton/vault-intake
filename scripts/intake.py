@@ -113,6 +113,19 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
 
+    if args.title is not None:
+        # Empty/whitespace `--title` would silently produce a blank
+        # frontmatter title and a `.md` filename. Codex review R4
+        # 2026-04-30: validate before any pipeline work runs.
+        cleaned = args.title.strip()
+        if not cleaned:
+            print(
+                "error: --title must be a non-empty value",
+                file=sys.stderr,
+            )
+            return EXIT_CONFIG_ERROR
+        args.title = cleaned
+
     config = _resolve_config_from_args(args)
     if config is None:
         return EXIT_CONFIG_ERROR
@@ -375,6 +388,17 @@ def _attempt_write(run: IntakeRun, config: Config, args: argparse.Namespace) -> 
                     nlm_command=args.nlm_command,
                     overwrite=False,
                 )
+        except FileExistsError as exc:
+            # TOCTOU: another writer claimed the renamed slot between
+            # `_auto_rename`'s exists() check and `confirm_and_write`'s
+            # atomic write. Surface as a write error rather than crash.
+            # Codex review R1 2026-04-30.
+            print(
+                f"write error: rename collision (TOCTOU): {exc}; "
+                "retry with --overwrite if appropriate",
+                file=sys.stderr,
+            )
+            return EXIT_WRITE_ERROR
         except (FileNotFoundError, ValueError, OSError) as exc:
             print(f"write error: {exc}", file=sys.stderr)
             return EXIT_WRITE_ERROR
