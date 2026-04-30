@@ -625,7 +625,7 @@ flush.dropped                        # int: corrupt files or missing notes
 - The CLI's exact JSON response shape is not authoritatively documented for file-uploaded sources. The parser is defensive over likely shapes; if a future CLI version changes the shape further, the parser falls back to `JSONDecodeError` and the path returns `failed` (no queue, since this is not auth-recoverable).
 - Source-count warning threshold is hardcoded at 45 (Standard plan: 50 cap). A config knob is deferred until a Pro plan use case surfaces.
 - Retry-count cap is not enforced in v1; queued entries persist until drained. A v2 cap (e.g., drop after 5 retries) is deferred until dogfood reveals demand.
-- The orchestrator's end-of-run "N items queued" UX surface is not part of Step 9; that lands with the orchestrator session.
+- The orchestrator's end-of-run "N items queued" UX surface is not part of Step 9; it is owned by the orchestrator's `IntakeRun.summary()` and is wired up via auto-drain at run start (see Orchestrator section below).
 
 ## Orchestrator (dry-run, v1)
 
