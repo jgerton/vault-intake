@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 from vault_intake.config import Config, ConfigError, resolve_config
-from vault_intake.notebooklm import flush_nlm_queue
+from vault_intake.notebooklm import _QUEUE_SCHEMA_VERSION, flush_nlm_queue
 
 
 EXIT_SUCCESS = 0
@@ -109,11 +109,16 @@ def _resolve_config_from_args(args: argparse.Namespace) -> Config | None:
 def _read_remaining_entries(config: Config) -> list[dict]:
     """Read whatever queue files remain after the drain pass.
 
-    Best-effort: malformed payloads are skipped silently because the
-    library's flush already counted them as dropped. We re-scan the
-    queue rather than extending `FlushResult` to surface entries; the
-    queue size is bounded (sha1-keyed dedupe per notebook+note pair) so
-    a re-scan stays cheap.
+    Best-effort: malformed or schema-mismatched payloads are skipped
+    silently because the library's flush already counted them as
+    dropped. We re-scan rather than extending `FlushResult` to surface
+    entries; the queue size is bounded (sha1-keyed dedupe per
+    notebook+note pair) so a re-scan stays cheap.
+
+    Codex review R1 2026-04-30: schema_version match enforced so a
+    stale-schema file that the library tried to drop but failed to
+    unlink (transient OSError) does not surface in the per-entry log
+    inconsistently with the FlushResult.dropped count.
     """
     queue_dir = config.vault_path.joinpath(*_QUEUE_SUBPATH)
     if not queue_dir.is_dir():
@@ -125,6 +130,8 @@ def _read_remaining_entries(config: Config) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(payload, dict):
+            continue
+        if payload.get("schema_version") != _QUEUE_SCHEMA_VERSION:
             continue
         notebook_id = payload.get("notebook_id")
         note_path = payload.get("note_path")

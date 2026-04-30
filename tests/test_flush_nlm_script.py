@@ -173,6 +173,38 @@ class TestStillQueued:
         assert "n1.md" in log_blob
         assert "retry_count=3" in log_blob
 
+    def test_per_entry_log_emits_all_fields_on_one_line(self, tmp_path):
+        """Codex review T2 2026-04-30: regression-lock the signed-off
+        single-line per-entry format `- notebook=ID note=PATH
+        retry_count=N` so a future change cannot split fields across
+        lines without a test break.
+        """
+        vault = _build_vault(tmp_path)
+        note = vault / "sessions" / "n1.md"
+        note.write_text("body", encoding="utf-8")
+        _add_queue_entry(
+            vault,
+            notebook_id="nb-ops-id",
+            note_path=note,
+            retry_count=3,
+        )
+        result = _run(["--vault", str(vault), "--nlm-command", "definitely-not-a-real-cli"])
+        assert result.returncode == 0, result.stderr
+        # Find a single line that contains all three fields in order.
+        single_line_match = next(
+            (
+                line for line in result.stdout.splitlines()
+                if "notebook=nb-ops-id" in line
+                and "note=" in line
+                and "retry_count=3" in line
+                and line.index("notebook=") < line.index("note=") < line.index("retry_count=")
+            ),
+            None,
+        )
+        assert single_line_match is not None, (
+            f"no single line with all three fields in order; stdout was:\n{result.stdout}"
+        )
+
     def test_no_per_entry_log_when_queue_empty(self, tmp_path):
         vault = _build_vault(tmp_path)
         result = _run(["--vault", str(vault)])
@@ -226,3 +258,16 @@ class TestVaultResolution:
         (vault / "CLAUDE.md").write_text("# no config block\n", encoding="utf-8")
         result = _run(["--vault", str(vault)])
         assert result.returncode == 2
+
+
+class TestArgparse:
+    def test_nlm_command_flag_requires_value(self, tmp_path):
+        """Codex review T1 2026-04-30: argparse must reject
+        `--nlm-command` without a value (exit 2). Locks the
+        flag-takes-value contract so a future `nargs='?'` change
+        cannot silently make the flag accept an empty string."""
+        vault = _build_vault(tmp_path)
+        result = _run(["--vault", str(vault), "--nlm-command"])
+        assert result.returncode == 2
+        # argparse emits a usage error to stderr.
+        assert "argument" in result.stderr.lower() or "usage" in result.stderr.lower()
