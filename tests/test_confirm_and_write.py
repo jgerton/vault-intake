@@ -220,6 +220,7 @@ def _make_intake_run(
             reason="dry-run: no note_path provided",
             source_count_warning=False,
         ),
+        body=body,
         final_markdown=final_md,
         written_path=None,
         queued_nlm_count=queued_nlm_count,
@@ -393,6 +394,42 @@ class TestConfirmAndWriteSectionUpdate:
         on_disk = project_file.read_text(encoding="utf-8")
         assert "## Captura original" in on_disk
         assert "Original raw text." in on_disk
+
+    def test_section_body_preserves_trigger_phrase_headings(self, tmp_path: Path):
+        # Regression: when the user's body text happens to contain
+        # `## Possíveis próximos passos` or `## Captura original` as
+        # literal lines, parsing the body back out of `final_markdown`
+        # would split on those headings and silently truncate the
+        # appended section. `IntakeRun.body` carries the body verbatim
+        # so this regression cannot recur. Codex review R
+        # "section body truncation hazard" 2026-04-30.
+        vault = _make_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        slug = "delta-launch"
+        project_file = vault / "projects" / f"{slug}.md"
+        project_file.write_text(
+            "---\ntitle: delta-launch\n---\n\nSeed.\n", encoding="utf-8"
+        )
+        body_with_trigger = (
+            "First paragraph of the appended section.\n\n"
+            "## Possíveis próximos passos\n\n"
+            "User wrote this exact heading in their note as a quote.\n\n"
+            "Second paragraph that must survive."
+        )
+        intake_run = _make_intake_run(
+            vault=vault,
+            route_result=_make_route_section_update(vault, slug=slug),
+            title="quoted-headings",
+            body=body_with_trigger,
+        )
+        confirm_and_write(intake_run, config)
+        on_disk = project_file.read_text(encoding="utf-8")
+        assert "First paragraph of the appended section." in on_disk
+        # The literal trigger phrase the user wrote is preserved.
+        assert "User wrote this exact heading in their note as a quote." in on_disk
+        # The trailing paragraph survives (would have been truncated by
+        # final_markdown re-parse).
+        assert "Second paragraph that must survive." in on_disk
 
     def test_raises_file_not_found_when_section_target_missing(self, tmp_path: Path):
         vault = _make_vault(tmp_path)
@@ -729,6 +766,7 @@ class TestConfirmAndWritePreconditions:
             next_actions=next_actions,
             route=None,
             notebooklm=None,
+            body="body",
             final_markdown=assemble_final_markdown(
                 body="body", frontmatter=fm, refinement=None, next_actions=next_actions
             ),
@@ -752,6 +790,7 @@ class TestConfirmAndWritePreconditions:
             next_actions=_empty_next_actions(),
             route=_make_route_regular(vault),
             notebooklm=None,
+            body="",
             final_markdown="",
             written_path=None,
             queued_nlm_count=0,

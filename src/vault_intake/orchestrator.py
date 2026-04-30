@@ -75,12 +75,17 @@ from .wikilinks import WikilinkResult, generate_wikilinks
 class IntakeRun:
     """Structured result of a single `run_intake` invocation.
 
-    Library-API contract: every field except `next_actions`,
+    Library-API contract: every field except `next_actions`, `body`,
     `final_markdown`, `written_path`, `queued_nlm_count`, and
     `questions` may be None when an upstream step raised
     NotImplementedError or when the orchestrator decided to skip the
     step under the active mode. `next_actions` always exists because
-    Step 7 is mode-agnostic and never raises.
+    Step 7 is mode-agnostic and never raises. `body` carries the post-
+    refinement text (or the raw input when Step 2 is skipped) so
+    `confirm_and_write` can build section-update content without
+    parsing it back out of `final_markdown` (which would mis-split
+    when the body itself happens to contain a `## Possíveis próximos
+    passos` or `## Captura original` heading).
     """
 
     detection: DetectionResult
@@ -92,6 +97,7 @@ class IntakeRun:
     next_actions: NextActionsResult
     route: RouteResult | None
     notebooklm: NotebookLMResult | None
+    body: str
     final_markdown: str
     written_path: Path | None
     queued_nlm_count: int
@@ -464,6 +470,7 @@ def run_intake(
         next_actions=next_actions,
         route=route_result,
         notebooklm=notebooklm_result,
+        body=body,
         final_markdown=final_markdown,
         written_path=None,
         queued_nlm_count=still_queued_initial + queued_this_run,
@@ -628,7 +635,12 @@ def _confirm_and_write_section_update(intake_run: IntakeRun) -> IntakeRun:
 
     section_md = _build_section_markdown(intake_run)
     existing = target.read_text(encoding="utf-8")
-    new_content = existing.rstrip() + "\n\n" + section_md
+    # Collapse trailing newlines only (not other whitespace) so the
+    # appended section sits two newlines below the existing content
+    # while preserving any trailing whitespace on the last content
+    # line. Codex review N "section-update whitespace normalization"
+    # 2026-04-30.
+    new_content = existing.rstrip("\n") + "\n\n" + section_md
     if not new_content.endswith("\n"):
         new_content += "\n"
     _atomic_write(target, new_content)
@@ -670,39 +682,20 @@ def _replace_frontmatter_block(markdown: str, frontmatter: Frontmatter) -> str:
 def _build_section_markdown(intake_run: IntakeRun) -> str:
     """Render the body of a section appended to a project hub.
 
-    Layout: `## {title}` heading, then the post-refinement body, then an
-    optional `## Captura original` block when refinement.changed.
-    Next-actions are intentionally omitted from the appended section
-    (they remain accessible via `IntakeRun.next_actions` for the CLI).
+    Layout: `## {title}` heading, then the post-refinement body (or the
+    raw body when Step 2 was skipped) carried verbatim from
+    `intake_run.body`, then an optional `## Captura original` block
+    when refinement.changed. Next-actions are intentionally omitted
+    from the appended section (they remain accessible via
+    `IntakeRun.next_actions` for the CLI).
     """
     assert intake_run.frontmatter is not None
-    body = _extract_body(intake_run)
-    parts = [f"## {intake_run.frontmatter.title}", "", body.strip()]
+    parts = [f"## {intake_run.frontmatter.title}", "", intake_run.body.strip()]
     if intake_run.refinement is not None and intake_run.refinement.changed:
         parts.extend(
             ["", "## Captura original", "", intake_run.refinement.original.strip()]
         )
     return "\n".join(parts)
-
-
-def _extract_body(intake_run: IntakeRun) -> str:
-    """Recover the body text used to assemble `final_markdown`."""
-    if intake_run.refinement is not None:
-        return intake_run.refinement.refined
-    after_yaml = re.sub(
-        r"\A---\n.*?\n---\n+",
-        "",
-        intake_run.final_markdown,
-        count=1,
-        flags=re.DOTALL,
-    )
-    # Trim trailing sections so the body is just the user content.
-    parts = re.split(
-        r"\n## (?:Possíveis próximos passos|Captura original)\n",
-        after_yaml,
-        maxsplit=1,
-    )
-    return parts[0].rstrip()
 
 
 __all__ = [
