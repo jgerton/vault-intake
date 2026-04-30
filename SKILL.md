@@ -1,11 +1,11 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), and 6 (Generate wikilinks, fixed_domains track only) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Step 5 builds a frozen `Frontmatter` dataclass populated from the upstream pipeline outputs plus capture metadata, emitting the OS-wide canonical baseline (architecture plan Section 1.4.1) and the fixed_domains track-specific additions (build spec lines 122-135) with a kebab-case title heuristic, capped tags, and a `to_yaml()` serializer; emergent mode raises NotImplementedError. Step 6 walks the vault, parses each markdown file's frontmatter, and produces ranked wikilink proposals (cross-domain weight 4, active project weight 3, concept overlap weight 2 at a 2-token floor, empty backlog markers from typed `[[X]]` weight 1) capped at 7 with dedupe by target and recency-then-alphabetical tiebreaks; emergent mode raises NotImplementedError. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," "categorize vault-intake PARA," "generate vault-intake frontmatter," or "generate vault-intake wikilinks" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 7 through 9 (next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), 6 (Generate wikilinks, fixed_domains track only), and 7 (Extract candidate next-actions, mode-agnostic) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Step 5 builds a frozen `Frontmatter` dataclass populated from the upstream pipeline outputs plus capture metadata, emitting the OS-wide canonical baseline (architecture plan Section 1.4.1) and the fixed_domains track-specific additions (build spec lines 122-135) with a kebab-case title heuristic, capped tags, and a `to_yaml()` serializer; emergent mode raises NotImplementedError. Step 6 walks the vault, parses each markdown file's frontmatter, and produces ranked wikilink proposals (cross-domain weight 4, active project weight 3, concept overlap weight 2 at a 2-token floor, empty backlog markers from typed `[[X]]` weight 1) capped at 7 with dedupe by target and recency-then-alphabetical tiebreaks; emergent mode raises NotImplementedError. Step 7 scans the body for action signals (imperatives, future-tense intent, dates and deadlines, decision points, named follow-ups), produces a seed list of candidate next-actions with VColey field annotations, and renders them as plain bullets under "Possíveis próximos passos"; mode-agnostic (no NotImplementedError gate) because action-signal detection is content-driven, not vault-driven. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," "categorize vault-intake PARA," "generate vault-intake frontmatter," "generate vault-intake wikilinks," or "extract vault-intake next-actions" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 8 through 9 (route, NotebookLM) are not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), and 6 (Generate wikilinks, fixed_domains track only) are implemented and usable; Steps 7 through 9 remain. Emergent-mode classification, emergent routing, the emergent frontmatter shape, and emergent-mode wikilinks are parallel tracks that land in separate sessions once fixed_domains stabilizes.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), 6 (Generate wikilinks, fixed_domains track only), and 7 (Extract candidate next-actions, mode-agnostic) are implemented and usable; Steps 8 through 9 remain. Emergent-mode classification, emergent routing, the emergent frontmatter shape, and emergent-mode wikilinks are parallel tracks that land in separate sessions once fixed_domains stabilizes. Step 7 is the first mode-agnostic step in the pipeline.
 
 ## Status
 
@@ -18,11 +18,11 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 4. PARA category | Implemented (fixed_domains/para only; emergent raises NotImplementedError) |
 | 5. Generate frontmatter | Implemented (fixed_domains track only; emergent raises NotImplementedError) |
 | 6. Generate wikilinks | Implemented (fixed_domains track only; emergent raises NotImplementedError) |
-| 7. Extract candidate next-actions | Not implemented |
+| 7. Extract candidate next-actions | Implemented (mode-agnostic; both modes share the same code path) |
 | 8. Route to destination folder | Not implemented |
 | 9. NotebookLM integration | Not implemented |
 
-Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), Step 5 (Generate frontmatter, fixed_domains), and Step 6 (Generate wikilinks, fixed_domains) helpers are safe to use today; all seven produce intermediate output rather than vault writes.
+Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), Step 5 (Generate frontmatter, fixed_domains), Step 6 (Generate wikilinks, fixed_domains), and Step 7 (Extract candidate next-actions) helpers are safe to use today; all eight produce intermediate output rather than vault writes.
 
 ## Spec references
 
@@ -380,11 +380,70 @@ result.proposals[0].reason       # short human-readable audit string
 
 The `Wikilink` and `WikilinkResult` dataclasses are frozen.
 
-## Pipeline (Steps 7 through 9, planned)
+## Step 7: Extract candidate next-actions (gated by action signals)
 
-Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1 through 6 are described in their own sections above.
+Step 7 scans the note body for action signals and produces a seed list of candidate next-actions per build spec lines 171-182. Gate is internal and content-driven: when no signals fire, the function returns `gate_fired=False` with empty proposals so the skill orchestrator can simply skip appending the section. Spec line 173 explicitly says "Avoid creating empty next-actions sections; intake should not generate task debt."
 
-7. **Extract candidate next-actions** gated by action signals only.
+This is the first mode-agnostic step in the pipeline. Action-signal detection is content-driven, not vault-driven, so fixed_domains and emergent share the same code path; emergent does NOT raise `NotImplementedError`.
+
+**Five gate signals (rule-based v1, Option A; model-call v2 deferred):**
+
+| Signal | Detection |
+|---|---|
+| `imperative` | First significant word of a sentence (after stripping bullet/list markers) is in the curated imperative-verb list (call, send, review, check, ping, fix, ship, post, write, schedule, decide, ...) |
+| `future_intent` | Word-bounded match of "we'll", "i'll", "i should", "we need to", "going to", "i must", etc. |
+| `date` | ISO date (`\d{4}-\d{2}-\d{2}`), relative phrase (tomorrow, today, this/next week/weekend/month, by EOW/EOD, by end of week/month/day), day-of-week with prefix (by/on/next/this Monday-Sunday), "by" + month name, or "in N day(s)/week(s)/month(s)" |
+| `decision_point` | TBD, "we/I need to decide", "still figuring (it) out", "open question(s)", "to be decided", "undecided", "we/I haven't decided", "we/I haven't figured (it) out", "decide on/whether" |
+| `named_followup` | Direct-address verb plus capitalized name (`ping Alice`, `ask Bob`), tool verb plus capitalized name (`test in Playwright`, `spike with Convex`, `deploy on Fly`), or delivery verb followed later in the sentence by `to <Capitalized>` (`Send the deck to Alice`) |
+
+**Result shape:** Frozen `NextAction` (with `what` required and `when`/`where`/`effort`/`waiting_on` optional, plus `signal` and `source_excerpt` for the audit trail) plus frozen `NextActionsResult` (`proposals`, `gate_fired`, `signals_detected` deduplicated and alpha-sorted). When multiple signals fire on the same sentence, `signal` joins the names with " + " (alpha-sorted for stability).
+
+**Output rendering:** `NextActionsResult.to_markdown()` emits `## Possíveis próximos passos` followed by plain bullets (NOT task checkboxes per spec line 175). Each bullet uses the kickoff's bracket-annotation form: `- [What] {what} [Where: ...] [When: ...] [Effort: ...] [Waiting on: ...] [Signal: ...]`. Optional brackets are omitted when their field is None; `[Signal: ...]` is always present. Returns empty string when `gate_fired=False`.
+
+**Empty-input behavior:** Empty or whitespace-only text returns `gate_fired=False` with empty proposals and empty `signals_detected`. The function never raises on benign input.
+
+**Cap:** `max_proposals` is keyword-only with a generous default of 10; spec line 175 says this is a seed list (over-supplying is acceptable; the user prunes at confirmation).
+
+The Python module `vault_intake.next_actions` exposes `NextAction`, `NextActionsResult`, and `extract_next_actions`:
+
+```python
+from vault_intake.next_actions import extract_next_actions
+
+result = extract_next_actions(
+    text=input_text,
+    config=config,
+    max_proposals=10,         # default 10
+)
+result.gate_fired             # True when at least one signal fired
+result.proposals              # tuple[NextAction, ...]; capped at max_proposals
+result.signals_detected       # tuple[str, ...]; deduplicated, alpha-sorted
+
+# Each NextAction:
+result.proposals[0].what            # the action candidate (the source sentence)
+result.proposals[0].when            # extracted date phrase, or None
+result.proposals[0].where           # extracted person/tool name, or None
+result.proposals[0].effort          # scope cue; None in v1 (extraction deferred)
+result.proposals[0].waiting_on      # dependency cue; None in v1 (extraction deferred)
+result.proposals[0].signal          # joined gate signals (e.g., "date + imperative + named_followup")
+result.proposals[0].source_excerpt  # the verbatim slice of input the candidate was extracted from
+
+# Render markdown:
+md = result.to_markdown()           # "" when gate did not fire
+```
+
+The `NextAction` and `NextActionsResult` dataclasses are frozen.
+
+**v1 deliberate simplifications:**
+
+- Imperative verb list is intentionally narrow; expand only when dogfood surfaces misses.
+- Named-followup name capture is constrained to capitalized words (proper-noun heuristic). Lowercase-named entities are missed; the user corrects at confirmation.
+- `effort` and `waiting_on` are not extracted in v1; both are always `None`. Extraction lands in v2 if dogfood demand surfaces.
+- The `config` argument is accepted for orchestrator parity with Steps 3-6 but is not consulted in v1; both `fixed_domains` and `emergent` produce identical output.
+
+## Pipeline (Steps 8 through 9, planned)
+
+Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1 through 7 are described in their own sections above.
+
 8. **Route to destination folder** mode-dependent.
 9. **NotebookLM integration** opt-in with graceful degradation.
 
