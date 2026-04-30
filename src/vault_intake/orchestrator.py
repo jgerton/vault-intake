@@ -47,6 +47,7 @@ import dataclasses
 import os
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from .classify import ClassificationResult, classify
@@ -64,6 +65,44 @@ from .para import categorize_para
 from .refine import RefinedContent, refine
 from .route import RouteResult, route
 from .wikilinks import WikilinkResult, generate_wikilinks
+
+
+# ---------------------------------------------------------------------------
+# IntakeQuestion structured-question shape
+# ---------------------------------------------------------------------------
+
+
+class QuestionKind(StrEnum):
+    """Routing tag for `IntakeQuestion`.
+
+    The CLI wrapper dispatches each question's answer to the right
+    `IntakeRun` field by inspecting `kind` rather than parsing the
+    free-form prompt text. `NOT_IMPLEMENTED` questions are
+    informational only and never accept an answer.
+    """
+
+    DETECTION_TYPE = "detection.type"
+    CLASSIFICATION = "classification.primary"
+    PARA = "para.category"
+    ROUTE_ARCHIVE = "route.archive"
+    FRONTMATTER_TITLE = "frontmatter.title"
+    NOT_IMPLEMENTED = "not_implemented"
+
+
+@dataclass(frozen=True)
+class IntakeQuestion:
+    """A single confirmation prompt collected by `collect_questions`.
+
+    `prompt` is the user-facing text. `suggested` is the current value
+    the user can accept (None for `NOT_IMPLEMENTED`, where there is no
+    choice to make). `step` is set only when `kind == NOT_IMPLEMENTED`
+    to identify which pipeline step was skipped.
+    """
+
+    kind: QuestionKind
+    prompt: str
+    suggested: str | None
+    step: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +140,7 @@ class IntakeRun:
     final_markdown: str
     written_path: Path | None
     queued_nlm_count: int
-    questions: tuple[str, ...]
+    questions: tuple[IntakeQuestion, ...]
 
     def summary(self) -> str:
         """Render the spec output contract per build spec lines 228-243.
@@ -184,7 +223,7 @@ class IntakeRun:
             lines.append("")
             lines.append("Confirmations needed:")
             for question in self.questions:
-                lines.append(f"- {question}")
+                lines.append(f"- {question.prompt}")
 
         return "\n".join(lines)
 
@@ -249,33 +288,75 @@ def collect_questions(
     route: RouteResult | None,
     frontmatter: Frontmatter | None,
     not_implemented: tuple[str, ...] = (),
-) -> tuple[str, ...]:
-    """Collect uncertainty signals into a tuple of confirmation questions.
+) -> tuple[IntakeQuestion, ...]:
+    """Collect uncertainty signals into a tuple of `IntakeQuestion`.
 
     Per kickoff item 7: detection / classification / PARA uncertainty,
-    archive flagging, and the always-confirm title heuristic. Plus a
-    line per NotImplementedError-skipped step so the user understands
-    what was not produced.
+    archive flagging, and the always-confirm title heuristic. Plus one
+    informational `NOT_IMPLEMENTED` entry per pipeline step that raised
+    NotImplementedError so the user understands what was not produced.
+
+    `kind` lets the CLI wrapper route each answer to the right
+    `IntakeRun` field without parsing prompt text.
     """
-    questions: list[str] = []
+    questions: list[IntakeQuestion] = []
     if detection.uncertain:
-        questions.append(f"I detected this as `{detection.type}`; correct?")
+        questions.append(
+            IntakeQuestion(
+                kind=QuestionKind.DETECTION_TYPE,
+                prompt=f"I detected this as `{detection.type}`; correct?",
+                suggested=detection.type,
+            )
+        )
     if classification is not None and classification.uncertain:
-        questions.append(f"I classified as `{classification.primary}`; correct?")
+        questions.append(
+            IntakeQuestion(
+                kind=QuestionKind.CLASSIFICATION,
+                prompt=f"I classified as `{classification.primary}`; correct?",
+                suggested=classification.primary,
+            )
+        )
     if para is not None and para.uncertain:
-        questions.append(f"I categorized as `{para.category}`; correct?")
+        questions.append(
+            IntakeQuestion(
+                kind=QuestionKind.PARA,
+                prompt=f"I categorized as `{para.category}`; correct?",
+                suggested=para.category,
+            )
+        )
     if route is not None and route.archive_flagged:
         questions.append(
-            f"PARA=archive flagged; route to `{route.destination}` or move to `archive/`?"
+            IntakeQuestion(
+                kind=QuestionKind.ROUTE_ARCHIVE,
+                prompt=(
+                    f"PARA=archive flagged; route to `{route.destination}` "
+                    "or move to `archive/`?"
+                ),
+                suggested=str(route.destination),
+            )
         )
     if frontmatter is not None and frontmatter.title:
         questions.append(
-            f"Title heuristic produced `{frontmatter.title}`; confirm or override?"
+            IntakeQuestion(
+                kind=QuestionKind.FRONTMATTER_TITLE,
+                prompt=(
+                    f"Title heuristic produced `{frontmatter.title}`; "
+                    "confirm or override?"
+                ),
+                suggested=frontmatter.title,
+            )
         )
     for step_name in not_implemented:
         questions.append(
-            f"`{step_name}` is not yet implemented in this mode; "
-            "this part of the run was skipped."
+            IntakeQuestion(
+                kind=QuestionKind.NOT_IMPLEMENTED,
+                prompt=(
+                    f"`{step_name}` is not yet implemented in this mode; "
+                    "this part of the run was skipped."
+                ),
+                suggested=None,
+                step=step_name,
+            )
         )
     return tuple(questions)
 
@@ -699,7 +780,9 @@ def _build_section_markdown(intake_run: IntakeRun) -> str:
 
 
 __all__ = [
+    "IntakeQuestion",
     "IntakeRun",
+    "QuestionKind",
     "assemble_final_markdown",
     "collect_questions",
     "confirm_and_write",

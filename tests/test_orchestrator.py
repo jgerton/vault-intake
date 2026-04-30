@@ -416,8 +416,8 @@ class TestCollectQuestions:
             not_implemented=(),
         )
         # Title heuristic is always confirmed per spec line 153.
-        assert any("Title" in q for q in questions)
-        assert not any("detected" in q.lower() for q in questions)
+        assert any("Title" in q.prompt for q in questions)
+        assert not any("detected" in q.prompt.lower() for q in questions)
 
     def test_detection_uncertain_emits_question(self):
         questions = collect_questions(
@@ -428,7 +428,7 @@ class TestCollectQuestions:
             frontmatter=_make_frontmatter(),
             not_implemented=(),
         )
-        assert any("`prompt`" in q for q in questions)
+        assert any("`prompt`" in q.prompt for q in questions)
 
     def test_classification_uncertain_emits_question(self):
         questions = collect_questions(
@@ -439,7 +439,7 @@ class TestCollectQuestions:
             frontmatter=_make_frontmatter(),
             not_implemented=(),
         )
-        assert any("`branding`" in q for q in questions)
+        assert any("`branding`" in q.prompt for q in questions)
 
     def test_para_uncertain_emits_question(self):
         questions = collect_questions(
@@ -450,7 +450,7 @@ class TestCollectQuestions:
             frontmatter=_make_frontmatter(),
             not_implemented=(),
         )
-        assert any("`archive`" in q for q in questions)
+        assert any("`archive`" in q.prompt for q in questions)
 
     def test_archive_flagged_emits_question(self):
         questions = collect_questions(
@@ -461,7 +461,7 @@ class TestCollectQuestions:
             frontmatter=_make_frontmatter(),
             not_implemented=(),
         )
-        assert any("archive" in q.lower() for q in questions)
+        assert any("archive" in q.prompt.lower() for q in questions)
 
     def test_not_implemented_steps_emit_questions(self):
         questions = collect_questions(
@@ -472,8 +472,8 @@ class TestCollectQuestions:
             frontmatter=None,
             not_implemented=("classify", "categorize_para"),
         )
-        assert any("classify" in q for q in questions)
-        assert any("categorize_para" in q for q in questions)
+        assert any("classify" in q.prompt for q in questions)
+        assert any("categorize_para" in q.prompt for q in questions)
 
     def test_no_title_question_when_frontmatter_missing(self):
         questions = collect_questions(
@@ -484,7 +484,141 @@ class TestCollectQuestions:
             frontmatter=None,
             not_implemented=("classify",),
         )
-        assert not any("Title" in q for q in questions)
+        assert not any("Title" in q.prompt for q in questions)
+
+
+# ---------------------------------------------------------------------------
+# IntakeQuestion structured-question shape (CLI wrapper enabling refactor)
+# ---------------------------------------------------------------------------
+
+
+class TestIntakeQuestionShape:
+    """Lock the structured `IntakeQuestion` shape that the CLI wrapper
+    needs in order to route answers programmatically.
+
+    The free-form string `tuple[str, ...]` shape used by the dry-run
+    orchestrator session is replaced here with `tuple[IntakeQuestion, ...]`
+    so the CLI wrapper can dispatch each answer to the right field via a
+    `kind` enum rather than parsing the question text.
+    """
+
+    def test_question_kind_enum_values(self):
+        from vault_intake.orchestrator import QuestionKind
+        assert QuestionKind.DETECTION_TYPE.value == "detection.type"
+        assert QuestionKind.CLASSIFICATION.value == "classification.primary"
+        assert QuestionKind.PARA.value == "para.category"
+        assert QuestionKind.ROUTE_ARCHIVE.value == "route.archive"
+        assert QuestionKind.FRONTMATTER_TITLE.value == "frontmatter.title"
+        assert QuestionKind.NOT_IMPLEMENTED.value == "not_implemented"
+
+    def test_intake_question_is_frozen(self):
+        from vault_intake.orchestrator import IntakeQuestion, QuestionKind
+        q = IntakeQuestion(
+            kind=QuestionKind.DETECTION_TYPE,
+            prompt="I detected this as `prompt`; correct?",
+            suggested="prompt",
+        )
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            q.prompt = "changed"  # type: ignore[misc]
+
+    def test_collect_questions_returns_intake_question_tuple(self):
+        from vault_intake.orchestrator import IntakeQuestion
+        questions = collect_questions(
+            detection=_make_detection(uncertain=True, content_type="prompt"),
+            classification=_make_classification(uncertain=True, primary="branding"),
+            para=_make_para(uncertain=True, category="archive"),
+            route=_make_route(archive_flagged=True),
+            frontmatter=_make_frontmatter(),
+            not_implemented=("classify",),
+        )
+        assert isinstance(questions, tuple)
+        assert all(isinstance(q, IntakeQuestion) for q in questions)
+
+    def test_collect_questions_emits_one_kind_per_uncertainty(self):
+        from vault_intake.orchestrator import QuestionKind
+        questions = collect_questions(
+            detection=_make_detection(uncertain=True, content_type="prompt"),
+            classification=_make_classification(uncertain=True, primary="branding"),
+            para=_make_para(uncertain=True, category="archive"),
+            route=_make_route(archive_flagged=True),
+            frontmatter=_make_frontmatter(),
+            not_implemented=("classify", "categorize_para"),
+        )
+        kinds = [q.kind for q in questions]
+        assert QuestionKind.DETECTION_TYPE in kinds
+        assert QuestionKind.CLASSIFICATION in kinds
+        assert QuestionKind.PARA in kinds
+        assert QuestionKind.ROUTE_ARCHIVE in kinds
+        assert QuestionKind.FRONTMATTER_TITLE in kinds
+        # NOT_IMPLEMENTED can repeat (one per skipped step).
+        not_impl = [q for q in questions if q.kind == QuestionKind.NOT_IMPLEMENTED]
+        assert len(not_impl) == 2
+
+    def test_suggested_carries_current_value(self):
+        from vault_intake.orchestrator import QuestionKind
+        questions = collect_questions(
+            detection=_make_detection(uncertain=True, content_type="prompt"),
+            classification=_make_classification(uncertain=True, primary="branding"),
+            para=_make_para(uncertain=True, category="archive"),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(title="my-note"),
+            not_implemented=(),
+        )
+        by_kind = {q.kind: q for q in questions}
+        assert by_kind[QuestionKind.DETECTION_TYPE].suggested == "prompt"
+        assert by_kind[QuestionKind.CLASSIFICATION].suggested == "branding"
+        assert by_kind[QuestionKind.PARA].suggested == "archive"
+        assert by_kind[QuestionKind.FRONTMATTER_TITLE].suggested == "my-note"
+
+    def test_route_archive_suggested_is_destination(self):
+        from vault_intake.orchestrator import QuestionKind
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(),
+            para=_make_para(category="archive"),
+            route=_make_route(archive_flagged=True),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+        )
+        by_kind = {q.kind: q for q in questions}
+        assert by_kind[QuestionKind.ROUTE_ARCHIVE].suggested == str(Path("/tmp/dest"))
+
+    def test_not_implemented_question_carries_step_field(self):
+        from vault_intake.orchestrator import QuestionKind
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=None,
+            para=None,
+            route=None,
+            frontmatter=None,
+            not_implemented=("classify", "categorize_para"),
+        )
+        not_impl = [q for q in questions if q.kind == QuestionKind.NOT_IMPLEMENTED]
+        steps = [q.step for q in not_impl]
+        assert steps == ["classify", "categorize_para"]
+        # informational only; no value to suggest
+        assert all(q.suggested is None for q in not_impl)
+
+    def test_intake_run_questions_field_holds_intake_questions(self, tmp_path):
+        """End-to-end `run_intake` returns an IntakeRun whose
+        `questions` tuple is structured."""
+        from vault_intake.orchestrator import IntakeQuestion
+        vault = _make_fixed_domains_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        result = run_intake(_OPS_INPUT, config)
+        assert isinstance(result.questions, tuple)
+        assert all(isinstance(q, IntakeQuestion) for q in result.questions)
+
+    def test_summary_renders_question_prompts(self, tmp_path):
+        """`IntakeRun.summary()` keeps the rendered string-per-line
+        format. Question prompts surface verbatim under the
+        `Confirmations needed:` heading."""
+        vault = _make_fixed_domains_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        result = run_intake(_OPS_INPUT, config)
+        summary = result.summary()
+        for question in result.questions:
+            assert question.prompt in summary
 
 
 # ---------------------------------------------------------------------------
@@ -677,13 +811,13 @@ class TestRunIntakeUncertainty:
         result = run_intake(text, config)
         assert result.classification is not None
         assert result.classification.uncertain is True
-        assert any("classified" in q.lower() for q in result.questions)
+        assert any("classified" in q.prompt.lower() for q in result.questions)
 
     def test_title_question_always_present_when_frontmatter_built(self, tmp_path):
         vault = _make_fixed_domains_vault(tmp_path)
         config = _make_config(vault_path=vault)
         result = run_intake(_OPS_INPUT, config)
-        assert any("Title" in q for q in result.questions)
+        assert any("Title" in q.prompt for q in result.questions)
 
 
 # ---------------------------------------------------------------------------
@@ -755,7 +889,7 @@ class TestRunIntakeEmergentMode:
         result = run_intake(_OPS_INPUT, config)
         assert isinstance(result, IntakeRun)
         assert result.classification is None
-        assert any("classify" in q for q in result.questions)
+        assert any("classify" in q.prompt for q in result.questions)
 
     def test_emergent_mode_step7_still_runs(self, tmp_path):
         vault = _make_emergent_vault(tmp_path)
@@ -773,7 +907,7 @@ class TestRunIntakeEmergentMode:
         vault = _make_emergent_vault(tmp_path)
         config = _make_config(vault_path=vault, mode="emergent", domains=())
         result = run_intake(_OPS_INPUT, config)
-        questions_blob = "\n".join(result.questions)
+        questions_blob = "\n".join(q.prompt for q in result.questions)
         assert "classify" in questions_blob
         assert "categorize_para" in questions_blob
         assert "generate_frontmatter" in questions_blob
@@ -801,7 +935,7 @@ class TestRunIntakeFixedDomainsStepNotImplementedCatch:
         assert result.para is None
         # Step 5 cascades to skip because para is None in fixed_domains.
         assert result.frontmatter is None
-        questions_blob = "\n".join(result.questions)
+        questions_blob = "\n".join(q.prompt for q in result.questions)
         assert "categorize_para" in questions_blob
         # Cascade non-pollution: only Step 4 raised NotImplementedError;
         # Steps 5/6 were dependency-blocked, not NotImplementedError-skipped,
@@ -823,7 +957,7 @@ class TestRunIntakeFixedDomainsStepNotImplementedCatch:
         # Steps 8 and 9 depend on frontmatter; they skip cleanly.
         assert result.route is None
         assert result.notebooklm is None
-        questions_blob = "\n".join(result.questions)
+        questions_blob = "\n".join(q.prompt for q in result.questions)
         assert "generate_frontmatter" in questions_blob
 
     def test_step6_notimplemented_caught(self, tmp_path):
@@ -850,7 +984,7 @@ class TestRunIntakeFixedDomainsStepNotImplementedCatch:
         # NextActionsResult-not-None check.
         assert result.next_actions.gate_fired is True
         assert len(result.next_actions.proposals) > 0
-        questions_blob = "\n".join(result.questions)
+        questions_blob = "\n".join(q.prompt for q in result.questions)
         assert "generate_wikilinks" in questions_blob
 
 
