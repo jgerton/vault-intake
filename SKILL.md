@@ -1,11 +1,11 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), and 5 (Generate frontmatter, fixed_domains track only) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Step 5 builds a frozen `Frontmatter` dataclass populated from the upstream pipeline outputs plus capture metadata, emitting the OS-wide canonical baseline (architecture plan Section 1.4.1) and the fixed_domains track-specific additions (build spec lines 122-135) with a kebab-case title heuristic, capped tags, and a `to_yaml()` serializer; emergent mode raises NotImplementedError. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," "categorize vault-intake PARA," or "generate vault-intake frontmatter" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 6 through 9 (wikilinks, next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), and 6 (Generate wikilinks, fixed_domains track only) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Step 5 builds a frozen `Frontmatter` dataclass populated from the upstream pipeline outputs plus capture metadata, emitting the OS-wide canonical baseline (architecture plan Section 1.4.1) and the fixed_domains track-specific additions (build spec lines 122-135) with a kebab-case title heuristic, capped tags, and a `to_yaml()` serializer; emergent mode raises NotImplementedError. Step 6 walks the vault, parses each markdown file's frontmatter, and produces ranked wikilink proposals (cross-domain weight 4, active project weight 3, concept overlap weight 2 at a 2-token floor, empty backlog markers from typed `[[X]]` weight 1) capped at 7 with dedupe by target and recency-then-alphabetical tiebreaks; emergent mode raises NotImplementedError. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," "categorize vault-intake PARA," "generate vault-intake frontmatter," or "generate vault-intake wikilinks" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 7 through 9 (next-actions, route, NotebookLM) are not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), and 5 (Generate frontmatter, fixed_domains track only) are implemented and usable; Steps 6 through 9 remain. Emergent-mode classification, emergent routing, and the emergent frontmatter shape are parallel tracks that land in separate sessions once fixed_domains stabilizes.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), and 6 (Generate wikilinks, fixed_domains track only) are implemented and usable; Steps 7 through 9 remain. Emergent-mode classification, emergent routing, the emergent frontmatter shape, and emergent-mode wikilinks are parallel tracks that land in separate sessions once fixed_domains stabilizes.
 
 ## Status
 
@@ -17,12 +17,12 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 3. Classify (mode-dependent) | Implemented (fixed_domains only; emergent raises NotImplementedError) |
 | 4. PARA category | Implemented (fixed_domains/para only; emergent raises NotImplementedError) |
 | 5. Generate frontmatter | Implemented (fixed_domains track only; emergent raises NotImplementedError) |
-| 6. Generate wikilinks | Not implemented |
+| 6. Generate wikilinks | Implemented (fixed_domains track only; emergent raises NotImplementedError) |
 | 7. Extract candidate next-actions | Not implemented |
 | 8. Route to destination folder | Not implemented |
 | 9. NotebookLM integration | Not implemented |
 
-Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), and Step 5 (Generate frontmatter, fixed_domains) helpers are safe to use today; all six produce intermediate output rather than vault writes.
+Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), Step 5 (Generate frontmatter, fixed_domains), and Step 6 (Generate wikilinks, fixed_domains) helpers are safe to use today; all seven produce intermediate output rather than vault writes.
 
 ## Spec references
 
@@ -320,11 +320,70 @@ fm.to_yaml()                      # YAML-frontmatter-ready text
 
 The `Frontmatter` dataclass is frozen. `confidence` is `float | None`; `to_yaml()` emits empty string for None to satisfy the OS-wide baseline's "optional" rule. `source_id` is always empty at frontmatter-creation time and gets filled by Step 9 (NotebookLM) if the user opts in.
 
-## Pipeline (Steps 6 through 9, planned)
+## Step 6: Generate wikilinks (mode-aware)
 
-Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1, 2, 3, 4, and 5 are described in their own sections above.
+Step 6 produces ranked wikilink proposals for the new note's "Related" section per build spec lines 155-170. The function walks the vault, parses each markdown file's frontmatter, and scores candidates against four signals; output is capped at 7 (spec line 169) and returned without padding when fewer than the target are found. Emergent mode raises `NotImplementedError`; the emergent shape (theme-based, walks `_sinteses/` and adjacent theme folders) lands in a parallel session.
 
-6. **Generate wikilinks** mode-aware; cross-domain or cross-theme top-weighted.
+**fixed_domains track (v1, implemented):**
+
+Walks `vault_path` recursively. Skips dot-prefixed directories (`.git`, `.obsidian`) and the `_indexes/` folder (the v1 source strategy reads real notes' frontmatter rather than curated index files). Skips files that fail to read or fail to parse as YAML frontmatter; treats them as having no domain.
+
+Weighting (highest to lowest, build spec lines 163-167):
+
+| Weight | Signal | Source |
+|---|---|---|
+| 4 | Cross-domain | Existing note whose `domain` frontmatter is in `classification.secondary` |
+| 3 | Active project | When `para.category == "project"` and `para.project_slug` is set; one wikilink per call |
+| 2 | Concept overlap | Existing note whose title shares 2+ significant tokens with the body (reuses Step 3's tokenizer and stop-word list) |
+| 1 | Empty backlog marker | User-typed `[[X]]` in body that does not match any existing vault note's frontmatter title or filename stem |
+
+Dedupe and tiebreaks:
+
+- Dedupe by `target` string. When a note qualifies for multiple signals, the highest weight wins. When weights tie across two candidates with the same target, the more recent `mtime` wins.
+- Sort proposals by weight descending, then `mtime` descending (newer notes first), then alphabetical by `source_path` string. Backlog markers (no source path) sort to the back of their weight band.
+- Cap at `max_proposals` (default 7). `min_proposals_target` (default 3) is advisory; the function returns what it has rather than padding with weak fillers.
+- `candidates_considered` records the count of unique deduped candidates examined before the cap, for the audit trail.
+
+Title resolution: existing-note `target` is the frontmatter `title` field when set, else the filename stem. Active-project `target` is the project slug; `source_path` resolves to `projects/{slug}.md`, then `projects/{slug}/`, else `None`. Backlog-marker `target` is the user-typed string verbatim (after stripping any `|alias` suffix); `source_path` is `None`.
+
+Concept-overlap heuristic uses the same `_tokenize` and `_STOPWORDS` from `classify.py` so domain semantics stay consistent with Step 3. The 2-token floor suppresses single-token noise.
+
+Empty backlog markers honor the user's explicit intent only; they are emitted only when the user typed `[[X]]`. v1 does not auto-generate markers from arbitrary nouns; v2 may add NER-style concept extraction if dogfood reveals demand.
+
+**emergent track (v1, not implemented):**
+
+`generate_wikilinks(...)` raises `NotImplementedError` when `config.mode == "emergent"`.
+
+The Python module `vault_intake.wikilinks` exposes `Wikilink`, `WikilinkResult`, and `generate_wikilinks`:
+
+```python
+from vault_intake.wikilinks import generate_wikilinks
+
+result = generate_wikilinks(
+    text=input_text,
+    classification=classification,
+    para=para,
+    config=config,
+    max_proposals=7,             # default 7
+    min_proposals_target=3,      # advisory; no padding when fewer candidates exist
+)
+result.proposals                 # tuple[Wikilink, ...] sorted weight desc, capped
+result.mode                      # "fixed_domains" or "emergent"
+result.candidates_considered     # unique candidates before the cap (audit trail)
+
+# Each Wikilink:
+result.proposals[0].target       # the target string used for [[target]]
+result.proposals[0].weight       # 1 (backlog) | 2 (concept) | 3 (project) | 4 (cross-domain)
+result.proposals[0].source_path  # Path to the contributing note, or None for backlog markers
+result.proposals[0].reason       # short human-readable audit string
+```
+
+The `Wikilink` and `WikilinkResult` dataclasses are frozen.
+
+## Pipeline (Steps 7 through 9, planned)
+
+Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1 through 6 are described in their own sections above.
+
 7. **Extract candidate next-actions** gated by action signals only.
 8. **Route to destination folder** mode-dependent.
 9. **NotebookLM integration** opt-in with graceful degradation.
