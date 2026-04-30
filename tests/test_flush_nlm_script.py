@@ -174,10 +174,12 @@ class TestStillQueued:
         assert "retry_count=3" in log_blob
 
     def test_per_entry_log_emits_all_fields_on_one_line(self, tmp_path):
-        """Codex review T2 2026-04-30: regression-lock the signed-off
-        single-line per-entry format `- notebook=ID note=PATH
-        retry_count=N` so a future change cannot split fields across
-        lines without a test break.
+        """Codex review T2 2026-04-30 (plus confirmation residual): regression-
+        lock the signed-off single-line per-entry format
+        `- notebook=ID note=PATH retry_count=N` so a future change
+        cannot split fields across lines AND cannot regress to emitting
+        `note=` with a blank or wrong value while keeping the field
+        names.
         """
         vault = _build_vault(tmp_path)
         note = vault / "sessions" / "n1.md"
@@ -190,19 +192,23 @@ class TestStillQueued:
         )
         result = _run(["--vault", str(vault), "--nlm-command", "definitely-not-a-real-cli"])
         assert result.returncode == 0, result.stderr
-        # Find a single line that contains all three fields in order.
+        # Find a single line that contains all three fields in order
+        # AND the actual note-path value, not just the field labels.
+        note_str = str(note)
         single_line_match = next(
             (
                 line for line in result.stdout.splitlines()
                 if "notebook=nb-ops-id" in line
                 and "note=" in line
                 and "retry_count=3" in line
+                and note_str in line
                 and line.index("notebook=") < line.index("note=") < line.index("retry_count=")
             ),
             None,
         )
         assert single_line_match is not None, (
-            f"no single line with all three fields in order; stdout was:\n{result.stdout}"
+            f"no single line with all three fields in order including the "
+            f"note path value {note_str!r}; stdout was:\n{result.stdout}"
         )
 
     def test_no_per_entry_log_when_queue_empty(self, tmp_path):
