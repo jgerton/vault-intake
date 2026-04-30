@@ -319,6 +319,30 @@ class TestAssembleFinalMarkdown:
         )
         assert "source_id: src-XYZ" in out
 
+    def test_yaml_block_parses_back_to_dict(self):
+        # Locks the `---\n{yaml}---` delimiter pattern: the assembled YAML
+        # must round-trip through yaml.safe_load. Codex review T
+        # "FINAL_MARKDOWN_YAML_NOT_REGRESSION_LOCKED" 2026-04-30.
+        import re
+
+        import yaml
+
+        fm = _make_frontmatter(source_id="src-roundtrip", title="my-note")
+        out = assemble_final_markdown(
+            body="Body line.",
+            frontmatter=fm,
+            refinement=None,
+            next_actions=_make_next_actions_empty(),
+        )
+        match = re.match(r"^---\n(.*?)\n---\n", out, re.DOTALL)
+        assert match is not None, f"no frontmatter block in: {out!r}"
+        parsed = yaml.safe_load(match.group(1))
+        assert isinstance(parsed, dict)
+        assert parsed["title"] == "my-note"
+        assert parsed["source_id"] == "src-roundtrip"
+        assert parsed["schema_version"] == "1.0"
+        assert parsed["domain"] == "ops"
+
 
 # ---------------------------------------------------------------------------
 # collect_questions helper
@@ -668,6 +692,12 @@ class TestRunIntakeFrontmatterMutation:
         # though run_intake passes note_path=None. The orchestrator
         # contract: when result.source_id is set, frontmatter.source_id
         # is updated via dataclasses.replace and rendered into final_markdown.
+        # Codex review T "FRONTMATTER_MUTATION_TEST_IS_MOCKED_SHORTCUT"
+        # 2026-04-30: this tests the orchestrator's replacement logic but
+        # not the live Step 9 success path; the integration-shaped test
+        # against real subprocess output lands with `confirm_and_write`,
+        # which is the only place where note_path is non-None and Step 9
+        # can actually succeed.
         fake_result = NotebookLMResult(
             source_id="src-ABC123",
             notebook_id="nb-ops",
@@ -723,6 +753,77 @@ class TestRunIntakeEmergentMode:
         result = run_intake(text, config)
         # Step 7 is mode-agnostic; it should still run even when classify failed.
         assert result.next_actions.gate_fired is True
+
+    def test_emergent_mode_full_cascade_in_questions(self, tmp_path):
+        # Codex review R "EMERGENT_SKIPS_NOT_SURFACED" 2026-04-30: when emergent
+        # classify raises, Steps 4-6 are also blocked under emergent v1; the
+        # orchestrator surfaces the full cascade so the user understands the run
+        # was incomplete, not just that classify alone was missing.
+        vault = _make_emergent_vault(tmp_path)
+        config = _make_config(vault_path=vault, mode="emergent", domains=())
+        result = run_intake(_OPS_INPUT, config)
+        questions_blob = "\n".join(result.questions)
+        assert "classify" in questions_blob
+        assert "categorize_para" in questions_blob
+        assert "generate_frontmatter" in questions_blob
+        assert "generate_wikilinks" in questions_blob
+
+
+class TestRunIntakeFixedDomainsStepNotImplementedCatch:
+    """Lock the NotImplementedError catch for Steps 4-6 in fixed_domains.
+
+    Codex review T "EMERGENT_DEGRADATION_COVERAGE_TOO_SHALLOW" 2026-04-30:
+    emergent-mode test coverage exercised only the Step 3 cascade. These
+    tests simulate Steps 4, 5, 6 raising NotImplementedError in fixed_domains
+    (a possible future state if emergent track partially ships) and verify
+    the orchestrator catches each independently and continues the run.
+    """
+
+    def test_step4_notimplemented_caught(self, tmp_path):
+        vault = _make_fixed_domains_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        with patch(
+            "vault_intake.orchestrator.categorize_para",
+            side_effect=NotImplementedError("simulated"),
+        ):
+            result = run_intake(_OPS_INPUT, config)
+        assert result.para is None
+        # Step 5 cascades to skip because para is None in fixed_domains.
+        assert result.frontmatter is None
+        questions_blob = "\n".join(result.questions)
+        assert "categorize_para" in questions_blob
+
+    def test_step5_notimplemented_caught(self, tmp_path):
+        vault = _make_fixed_domains_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        with patch(
+            "vault_intake.orchestrator.generate_frontmatter",
+            side_effect=NotImplementedError("simulated"),
+        ):
+            result = run_intake(_OPS_INPUT, config)
+        assert result.frontmatter is None
+        # Steps 8 and 9 depend on frontmatter; they skip cleanly.
+        assert result.route is None
+        assert result.notebooklm is None
+        questions_blob = "\n".join(result.questions)
+        assert "generate_frontmatter" in questions_blob
+
+    def test_step6_notimplemented_caught(self, tmp_path):
+        vault = _make_fixed_domains_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        with patch(
+            "vault_intake.orchestrator.generate_wikilinks",
+            side_effect=NotImplementedError("simulated"),
+        ):
+            result = run_intake(_OPS_INPUT, config)
+        # Steps 5, 7, 8, 9 still run successfully because they do not depend
+        # on wikilinks output.
+        assert result.frontmatter is not None
+        assert result.wikilinks is None
+        assert result.route is not None
+        assert result.notebooklm is not None
+        questions_blob = "\n".join(result.questions)
+        assert "generate_wikilinks" in questions_blob
 
 
 # ---------------------------------------------------------------------------

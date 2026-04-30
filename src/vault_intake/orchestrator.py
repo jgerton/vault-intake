@@ -425,6 +425,20 @@ def run_intake(
             next_actions=next_actions,
         )
 
+    # Emergent-mode cascade: when Step 3 raised NotImplementedError, Steps 4,
+    # 5, and 6 are also blocked under emergent v1 (all four raise in their
+    # respective library modules). Surface the full cascade so the user
+    # understands the run was incomplete, rather than only flagging the first
+    # step that raised. Codex review R "EMERGENT_SKIPS_NOT_SURFACED" 2026-04-30.
+    if config.mode == "emergent" and "classify" in not_implemented:
+        for downstream in (
+            "categorize_para",
+            "generate_frontmatter",
+            "generate_wikilinks",
+        ):
+            if downstream not in not_implemented:
+                not_implemented.append(downstream)
+
     questions = collect_questions(
         detection=detection,
         classification=classification,
