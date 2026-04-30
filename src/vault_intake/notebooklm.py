@@ -573,14 +573,19 @@ def _safe_int(value: object, default: int = 0) -> int:
 
     bool is rejected because the semantic intent is a counter, and
     Python's `bool` is a subclass of `int` that would otherwise be
-    accepted silently.
+    accepted silently. Non-finite floats (inf, -inf, NaN) and floats
+    beyond the int range raise on `int(...)`; they are caught and
+    return `default` so a corrupt queue entry never crashes the flush.
     """
     if isinstance(value, bool):
         return default
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value)
+        try:
+            return int(value)
+        except (OverflowError, ValueError):
+            return default
     if isinstance(value, str):
         try:
             return int(value)

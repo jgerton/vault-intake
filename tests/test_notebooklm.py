@@ -512,6 +512,107 @@ def test_source_list_supports_wrapper_response_shape(tmp_path):
     assert result.source_id == "src-abc"
 
 
+def test_source_list_counts_bare_id_string_entries(tmp_path):
+    """Codex R4 regression lock: a CLI emitting bare ID strings instead
+    of dict objects must still count as sources, otherwise we undercount
+    and miss the 50/50 cap."""
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path)
+
+    fake = _route_subprocess(
+        source_list=_completed(stdout=json.dumps([f"src-{i}" for i in range(50)])),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = integrate_notebooklm(
+            classification=_make_classification(),
+            frontmatter=_make_frontmatter(),
+            config=config,
+            note_path=note,
+        )
+
+    # Expect failed (count exhausted at 50) not a successful add.
+    assert result.failed is True
+    assert "exhausted" in result.reason.lower() or "source count" in result.reason.lower()
+
+
+def test_source_list_counts_mixed_dict_and_string_entries(tmp_path):
+    """R4 regression lock: heterogeneous list entries should still count."""
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path)
+
+    mixed = [{"id": f"src-{i}"} for i in range(23)] + [f"src-id-{i}" for i in range(22)]
+    fake = _route_subprocess(
+        source_list=_completed(stdout=json.dumps(mixed)),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = integrate_notebooklm(
+            classification=_make_classification(),
+            frontmatter=_make_frontmatter(),
+            config=config,
+            note_path=note,
+        )
+
+    assert result.source_count_warning is True  # 45 entries
+    assert result.source_id == "src-abc"
+    assert result.failed is False
+
+
+def test_source_list_empty_list_is_zero_count(tmp_path):
+    """R4 regression lock: empty list returns count=0, not a parse error."""
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path)
+
+    fake = _route_subprocess(source_list=_completed(stdout=json.dumps([])))
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = integrate_notebooklm(
+            classification=_make_classification(),
+            frontmatter=_make_frontmatter(),
+            config=config,
+            note_path=note,
+        )
+
+    assert result.failed is False
+    assert result.source_count_warning is False
+    assert result.source_id == "src-abc"
+
+
+def test_flush_handles_non_finite_float_retry_count(tmp_path):
+    """Confirmation-pass R: malformed non-finite float retry_count
+    (NaN, Infinity) should normalize to 0 instead of raising
+    OverflowError/ValueError on int() coercion."""
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path)
+    queue_dir = tmp_path / ".vault-intake" / "nlm_queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    import hashlib
+    digest = hashlib.sha1(f"nb-ops-id|{note}".encode("utf-8")).hexdigest()
+    # JSON allows Infinity in some parsers (Python's json with
+    # default flags accepts it). Write the file directly so the
+    # malformed value is real on disk.
+    (queue_dir / f"{digest}.json").write_text(
+        '{"schema_version": 1, "queued_at": "2026-04-30", '
+        f'"note_path": {json.dumps(str(note))}, '
+        '"notebook_id": "nb-ops-id", '
+        '"classification_primary": "ops", '
+        '"retry_count": Infinity}',
+        encoding="utf-8",
+    )
+
+    fake = _route_subprocess(
+        source_add=_completed(returncode=1, stderr="Unauthorized\n"),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = flush_nlm_queue(config)
+
+    # Should not raise. Auth error keeps it queued; retry_count
+    # normalizes from Infinity to 0 then increments to 1.
+    assert result.still_queued == 1
+    files = list(queue_dir.glob("*.json"))
+    assert len(files) == 1
+    payload = json.loads(files[0].read_text(encoding="utf-8"))
+    assert payload["retry_count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Round 5: failure paths (no auth issue, no queueing)
 # ---------------------------------------------------------------------------
