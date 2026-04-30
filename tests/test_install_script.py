@@ -430,6 +430,34 @@ class TestDestinationSymlinkContainment:
         # The outside target must NOT have been overwritten.
         assert outside.read_text(encoding="utf-8") == "OUTSIDE TARGET CONTENT\n"
 
+    def test_dest_root_symlink_rejected(self, tmp_path, symlink_supported):
+        source = _build_source(tmp_path)
+        # User (or attacker) planted a symlink at the dest root path
+        # pointing at outside content. mkdir(exist_ok=True) would silently
+        # accept this and every child write would clobber outside content.
+        outside_target = tmp_path / "outside_target_dir"
+        outside_target.mkdir()
+        (outside_target / "user_file.md").write_text(
+            "USER OWNED CONTENT\n", encoding="utf-8"
+        )
+        dest_parent = tmp_path / "skills"
+        dest_parent.mkdir()
+        dest = dest_parent / "vault-intake"
+        dest.symlink_to(outside_target, target_is_directory=True)
+
+        result = _run(["--source", str(source), "--dest", str(dest)])
+
+        assert result.returncode == 2, (result.returncode, result.stderr)
+        assert "symlink" in result.stderr.lower()
+        # The outside target must NOT have any install artifacts written
+        # into it (no SKILL.md, no scripts/, etc.).
+        assert (outside_target / "user_file.md").read_text(
+            encoding="utf-8"
+        ) == "USER OWNED CONTENT\n"
+        assert not (outside_target / "SKILL.md").exists()
+        assert not (outside_target / "scripts").exists()
+        assert not (outside_target / "src").exists()
+
     def test_dest_synced_dir_symlink_replaced_not_recursed(
         self, tmp_path, symlink_supported
     ):

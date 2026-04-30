@@ -95,6 +95,17 @@ def install(source: Path, dest: Path) -> InstallResult:
     if not source.is_dir():
         raise FileNotFoundError(f"source not found or not a directory: {source}")
 
+    # Refuse to install into a symlinked destination root. `dest.mkdir(
+    # exist_ok=True)` would silently accept a pre-existing symlink, and all
+    # subsequent writes (`dest / name`, `dest / rel`) would dereference it
+    # and clobber whatever outside path the symlink targets. The user owns
+    # the dest root path; if they made it a symlink intentionally, they
+    # must clean up themselves before re-running install.
+    if dest.is_symlink():
+        raise FileNotFoundError(
+            f"destination root is a symlink, refusing: {dest}"
+        )
+
     for name in SYNC_FILES:
         candidate = source / name
         if candidate.is_symlink():
