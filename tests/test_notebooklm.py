@@ -604,6 +604,70 @@ def test_runtime_csrf_error_pattern_writes_to_queue(tmp_path):
     assert result.queued is True
 
 
+@pytest.mark.parametrize(
+    "stderr_text,description",
+    [
+        ("Error: Unauthorized\n", "unauthorized"),
+        ("CSRF token missing\n", "csrf-missing"),
+        ("CSRF token expired\n", "csrf-expired"),
+        ("redirected to login page\n", "redirect-past-tense"),
+        ("Server redirect to sign-in\n", "redirect-signin"),
+        ("SNlM0e not found in response\n", "snlm0e-marker"),
+        ("Authentication required\n", "auth-required"),
+        ("Authentication expired\n", "auth-expired"),
+        ("Authentication failed\n", "auth-failed"),
+        ("Auth required\n", "auth-required-short"),
+    ],
+)
+def test_every_auth_error_pattern_triggers_queue(tmp_path, stderr_text, description):
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path, name=f"note-{description}.md")
+
+    fake = _route_subprocess(
+        source_add=_completed(returncode=1, stderr=stderr_text),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = integrate_notebooklm(
+            classification=_make_classification(),
+            frontmatter=_make_frontmatter(),
+            config=config,
+            note_path=note,
+        )
+
+    assert result.failed is True, f"pattern '{description}' should be classified as auth error"
+    assert result.queued is True, f"pattern '{description}' should be queued"
+
+
+@pytest.mark.parametrize(
+    "stderr_text,description",
+    [
+        ("Error: redirect URL is invalid\n", "redirect-non-auth"),
+        ("Error: redirected to https://example.com\n", "redirect-non-auth-url"),
+        ("Error: invalid mime type\n", "mime"),
+        ("Network unreachable\n", "network"),
+    ],
+)
+def test_non_auth_near_miss_does_not_queue(tmp_path, stderr_text, description):
+    """Defensive: error messages mentioning 'redirect' but unrelated to auth
+    should NOT trigger the auth-error queue path."""
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path, name=f"note-{description}.md")
+
+    fake = _route_subprocess(
+        source_add=_completed(returncode=2, stderr=stderr_text),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = integrate_notebooklm(
+            classification=_make_classification(),
+            frontmatter=_make_frontmatter(),
+            config=config,
+            note_path=note,
+        )
+
+    assert result.failed is True, f"pattern '{description}' should be failed"
+    assert result.queued is False, f"pattern '{description}' must not queue"
+
+
 def test_runtime_non_auth_error_returns_failed_no_queue(tmp_path):
     """Generic CLI failures that aren't auth-related should not queue."""
     config = _make_config(vault_path=tmp_path)
@@ -967,6 +1031,111 @@ def test_flush_handles_corrupt_queue_file_as_dropped(tmp_path):
     assert result.dropped == 1
     assert result.processed == 0
     assert result.still_queued == 0
+
+
+def test_flush_drops_queue_files_missing_required_fields(tmp_path):
+    """A versioned-but-malformed queue file must be dropped, not raise.
+
+    Validates the never-block contract for corrupt-but-versioned data.
+    """
+    config = _make_config(vault_path=tmp_path)
+    queue_dir = tmp_path / ".vault-intake" / "nlm_queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    (queue_dir / "missing-fields.json").write_text(
+        json.dumps({"schema_version": 1, "queued_at": "2026-04-30T10:00:00Z"}),
+        encoding="utf-8",
+    )
+
+    fake = _route_subprocess()
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = flush_nlm_queue(config)
+
+    assert result.dropped == 1
+    assert result.processed == 0
+    assert result.still_queued == 0
+    assert not list(queue_dir.glob("*.json"))
+
+
+def test_flush_drops_queue_files_with_wrong_schema_version(tmp_path):
+    config = _make_config(vault_path=tmp_path)
+    queue_dir = tmp_path / ".vault-intake" / "nlm_queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    note = _make_note(tmp_path)
+    (queue_dir / "wrong-version.json").write_text(
+        json.dumps({
+            "schema_version": 999,
+            "queued_at": "2026-04-30",
+            "note_path": str(note),
+            "notebook_id": "nb-ops-id",
+            "classification_primary": "ops",
+            "retry_count": 0,
+        }),
+        encoding="utf-8",
+    )
+
+    fake = _route_subprocess()
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = flush_nlm_queue(config)
+
+    assert result.dropped == 1
+
+
+def test_flush_normalizes_non_numeric_retry_count(tmp_path):
+    """Malformed retry_count (string, missing) should not raise during flush."""
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path)
+    queue_dir = tmp_path / ".vault-intake" / "nlm_queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    import hashlib
+    digest = hashlib.sha1(f"nb-ops-id|{note}".encode("utf-8")).hexdigest()
+    (queue_dir / f"{digest}.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "queued_at": "2026-04-30",
+            "note_path": str(note),
+            "notebook_id": "nb-ops-id",
+            "classification_primary": "ops",
+            "retry_count": "not-a-number",
+        }),
+        encoding="utf-8",
+    )
+
+    fake = _route_subprocess(
+        source_add=_completed(returncode=1, stderr="Unauthorized\n"),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = flush_nlm_queue(config)
+
+    # Auth fails on the add, retry_count was non-numeric; the entry
+    # should still be re-written with retry_count normalized to 1
+    # (default 0, plus the +1 increment), no exception raised.
+    assert result.still_queued == 1
+    files = list(queue_dir.glob("*.json"))
+    assert len(files) == 1
+    payload = json.loads(files[0].read_text(encoding="utf-8"))
+    assert payload["retry_count"] == 1
+
+
+def test_queue_write_uses_atomic_replace(tmp_path):
+    """Queue writes must be atomic (temp file + os.replace) so a crash
+    mid-write cannot corrupt an existing entry."""
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path)
+
+    fake = _route_subprocess(
+        auth_check=_completed(returncode=1, stderr="Unauthorized"),
+    )
+    # Spy on os.replace to confirm atomic write path is used.
+    with patch("vault_intake.notebooklm.os.replace") as replace_spy, \
+         patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        integrate_notebooklm(
+            classification=_make_classification(),
+            frontmatter=_make_frontmatter(),
+            config=config,
+            note_path=note,
+        )
+
+    assert replace_spy.called
 
 
 # ---------------------------------------------------------------------------

@@ -103,7 +103,13 @@ _SOURCE_LIMIT = 50
 
 _AUTH_ERROR_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bunauthorized\b", re.IGNORECASE),
-    re.compile(r"\bredirect\s*to\s*login\b", re.IGNORECASE),
+    # Redirect-to-auth includes past tense ("redirected to login"); requires
+    # nearby login/sign-in/auth context so non-auth "redirect URL invalid"
+    # style errors do not falsely queue.
+    re.compile(
+        r"\bredirect(?:ed)?\s+to\s+(?:login|sign[-\s]?in|auth(?:entication)?)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\bcsrf\s*token\s*(missing|expired)\b", re.IGNORECASE),
     re.compile(r"\bSNlM0e\s*not\s*found\b", re.IGNORECASE),
     re.compile(r"\bauth(?:entication)?\s*(failed|expired|required)\b", re.IGNORECASE),
@@ -318,6 +324,8 @@ def flush_nlm_queue(
     processed = 0
     still_queued = 0
     for queue_file, payload in valid:
+        # _read_queue_file already validated these fields are non-empty
+        # strings and that retry_count is normalized.
         notebook_id = payload["notebook_id"]
         note_path = Path(payload["note_path"])
         try:
@@ -327,7 +335,11 @@ def flush_nlm_queue(
         try:
             _source_add(notebook_id, note_path, nlm_command)
         except Exception:  # noqa: BLE001 - any add failure leaves the entry queued
-            payload["retry_count"] = int(payload.get("retry_count", 0)) + 1
+            payload["retry_count"] = _safe_int(payload.get("retry_count")) + 1
+            # If the rewrite fails (disk full, permissions, etc.) the
+            # original file remains untouched on disk because the write
+            # is atomic via temp + os.replace; still count as queued so
+            # the count surfaces accurately.
             _write_queue_payload(queue_file, payload)
             still_queued += 1
             continue
@@ -407,12 +419,20 @@ def _source_add(notebook_id: str, note_path: Path, nlm_command: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _parse_source_list(stdout: str) -> list[dict]:
+def _parse_source_list(stdout: str) -> list:
+    """Return the source entries for counting purposes.
+
+    Returns the raw items as the CLI emitted them; callers must only
+    count `len(...)` rather than introspect fields, because the CLI's
+    documented-but-not-fully-stable JSON shape may emit either dict
+    items (typical) or bare ID strings, and dropping non-dict items
+    would silently undercount and cause a 50/50 cap miss.
+    """
     parsed = json.loads(stdout)
     if isinstance(parsed, list):
-        return [item for item in parsed if isinstance(item, dict)]
+        return list(parsed)
     if isinstance(parsed, dict) and isinstance(parsed.get("sources"), list):
-        return [item for item in parsed["sources"] if isinstance(item, dict)]
+        return list(parsed["sources"])
     return []
 
 
@@ -462,7 +482,7 @@ def _try_queue(
 
     Dedup key is `(notebook_id, note_path)`. If a queue file already
     exists at the deterministic key, increment its retry_count rather
-    than creating a duplicate. Never raises; on disk error returns False.
+    than creating a duplicate. Never raises; on any error returns False.
     """
     try:
         queue_dir = _queue_dir(config)
@@ -470,9 +490,8 @@ def _try_queue(
         queue_file = queue_dir / _queue_filename(notebook_id, note_path)
         existing = _read_queue_file(queue_file) if queue_file.exists() else None
         if existing is not None:
-            existing["retry_count"] = int(existing.get("retry_count", 0)) + 1
-            _write_queue_payload(queue_file, existing)
-            return True
+            existing["retry_count"] = _safe_int(existing.get("retry_count")) + 1
+            return _write_queue_payload(queue_file, existing)
         payload = {
             "schema_version": _QUEUE_SCHEMA_VERSION,
             "queued_at": datetime.now(timezone.utc).isoformat(),
@@ -481,13 +500,19 @@ def _try_queue(
             "classification_primary": classification_primary,
             "retry_count": 0,
         }
-        _write_queue_payload(queue_file, payload)
-        return True
-    except OSError:
+        return _write_queue_payload(queue_file, payload)
+    except Exception:  # noqa: BLE001 - never-block contract
         return False
 
 
 def _read_queue_file(queue_file: Path) -> dict | None:
+    """Return a validated payload dict, or None if invalid/corrupt.
+
+    Validation: the file must be readable, parse as a JSON object, carry
+    the current schema_version, and contain non-empty `notebook_id` and
+    `note_path` strings. Missing or malformed required fields make the
+    entry invalid; flush_nlm_queue counts these as `dropped`.
+    """
     try:
         text = queue_file.read_text(encoding="utf-8")
     except OSError:
@@ -500,14 +525,40 @@ def _read_queue_file(queue_file: Path) -> dict | None:
         return None
     if parsed.get("schema_version") != _QUEUE_SCHEMA_VERSION:
         return None
+    notebook_id = parsed.get("notebook_id")
+    note_path = parsed.get("note_path")
+    if not isinstance(notebook_id, str) or not notebook_id:
+        return None
+    if not isinstance(note_path, str) or not note_path:
+        return None
+    # Normalize retry_count so downstream arithmetic never raises.
+    parsed["retry_count"] = _safe_int(parsed.get("retry_count"))
     return parsed
 
 
-def _write_queue_payload(queue_file: Path, payload: dict) -> None:
-    queue_file.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+def _write_queue_payload(queue_file: Path, payload: dict) -> bool:
+    """Atomic queue write via temp file + os.replace.
+
+    Returns True on success, False on any IO/serialization error. Never
+    raises so callers can use the boolean to decide whether to count
+    the entry as queued or as a write-failure.
+    """
+    try:
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError):
+        return False
+    tmp = queue_file.with_suffix(queue_file.suffix + ".tmp")
+    try:
+        tmp.write_text(serialized, encoding="utf-8")
+        os.replace(tmp, queue_file)
+        return True
+    except OSError:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        return False
 
 
 def _safe_unlink(path: Path) -> None:
@@ -515,6 +566,27 @@ def _safe_unlink(path: Path) -> None:
         path.unlink()
     except OSError:
         pass
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    """Coerce `value` to int, returning `default` on any failure.
+
+    bool is rejected because the semantic intent is a counter, and
+    Python's `bool` is a subclass of `int` that would otherwise be
+    accepted silently.
+    """
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
 
 
 # ---------------------------------------------------------------------------
