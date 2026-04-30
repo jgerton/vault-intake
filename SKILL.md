@@ -1,6 +1,6 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), 6 (Generate wikilinks, fixed_domains track only), 7 (Extract candidate next-actions, mode-agnostic), and 8 (Route to destination folder, both modes) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Step 5 builds a frozen `Frontmatter` dataclass populated from the upstream pipeline outputs plus capture metadata, emitting the OS-wide canonical baseline (architecture plan Section 1.4.1) and the fixed_domains track-specific additions (build spec lines 122-135) with a kebab-case title heuristic, capped tags, and a `to_yaml()` serializer; emergent mode raises NotImplementedError. Step 6 walks the vault, parses each markdown file's frontmatter, and produces ranked wikilink proposals (cross-domain weight 4, active project weight 3, concept overlap weight 2 at a 2-token floor, empty backlog markers from typed `[[X]]` weight 1) capped at 7 with dedupe by target and recency-then-alphabetical tiebreaks; emergent mode raises NotImplementedError. Step 7 scans the body for action signals (imperatives, future-tense intent, dates and deadlines, decision points, named follow-ups), produces a seed list of candidate next-actions with VColey field annotations, and renders them as plain bullets under "Possíveis próximos passos"; mode-agnostic (no NotImplementedError gate) because action-signal detection is content-driven, not vault-driven. Step 8 routes notes to a destination folder via the spec's (type, PARA) destination table in fixed_domains mode and via theme-folder lookup with `_inbox/` fallback in emergent mode; the function is a path-suggestion only with no filesystem side effects, returning a frozen `RouteResult` carrying the destination, optional project link target, archive flag, inbox-fallback flag, section-update flag, audit reason, and mode. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," "categorize vault-intake PARA," "generate vault-intake frontmatter," "generate vault-intake wikilinks," "extract vault-intake next-actions," or "route vault-intake content" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Step 9 (NotebookLM) is not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), 6 (Generate wikilinks, fixed_domains track only), 7 (Extract candidate next-actions, mode-agnostic), 8 (Route to destination folder, both modes), and 9 (NotebookLM integration, mode-agnostic with auth precheck and persistent retry queue) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 9 looks up `classification.primary` in `config.notebook_map`, runs an auth precheck via `notebooklm auth check --test`, calls `notebooklm source list` to enforce a 45/50 source-count warning, and adds the note via `notebooklm source add ... --json`; on auth failure (precheck or runtime), the action is queued at `<vault>/.vault-intake/nlm_queue/` for later drain via `flush_nlm_queue`, while non-auth failures (timeout, JSON parse error, source-count exhausted) return failed without queueing. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Step 5 builds a frozen `Frontmatter` dataclass populated from the upstream pipeline outputs plus capture metadata, emitting the OS-wide canonical baseline (architecture plan Section 1.4.1) and the fixed_domains track-specific additions (build spec lines 122-135) with a kebab-case title heuristic, capped tags, and a `to_yaml()` serializer; emergent mode raises NotImplementedError. Step 6 walks the vault, parses each markdown file's frontmatter, and produces ranked wikilink proposals (cross-domain weight 4, active project weight 3, concept overlap weight 2 at a 2-token floor, empty backlog markers from typed `[[X]]` weight 1) capped at 7 with dedupe by target and recency-then-alphabetical tiebreaks; emergent mode raises NotImplementedError. Step 7 scans the body for action signals (imperatives, future-tense intent, dates and deadlines, decision points, named follow-ups), produces a seed list of candidate next-actions with VColey field annotations, and renders them as plain bullets under "Possíveis próximos passos"; mode-agnostic (no NotImplementedError gate) because action-signal detection is content-driven, not vault-driven. Step 8 routes notes to a destination folder via the spec's (type, PARA) destination table in fixed_domains mode and via theme-folder lookup with `_inbox/` fallback in emergent mode; the function is a path-suggestion only with no filesystem side effects, returning a frozen `RouteResult` carrying the destination, optional project link target, archive flag, inbox-fallback flag, section-update flag, audit reason, and mode. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," "categorize vault-intake PARA," "generate vault-intake frontmatter," "generate vault-intake wikilinks," "extract vault-intake next-actions," "route vault-intake content," or "integrate vault-intake with NotebookLM" against specific input. Do not use this skill end-to-end against a real vault; the orchestrator that wires the 9 pipeline steps together and produces the spec's output contract has not yet landed.
 ---
 
 # vault-intake
@@ -20,9 +20,9 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 6. Generate wikilinks | Implemented (fixed_domains track only; emergent raises NotImplementedError) |
 | 7. Extract candidate next-actions | Implemented (mode-agnostic; both modes share the same code path) |
 | 8. Route to destination folder | Implemented (both modes; path-suggestion only, no filesystem side effects) |
-| 9. NotebookLM integration | Not implemented |
+| 9. NotebookLM integration | Implemented (mode-agnostic; opt-in with graceful degradation; auth precheck and persistent retry queue) |
 
-Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), Step 5 (Generate frontmatter, fixed_domains), Step 6 (Generate wikilinks, fixed_domains), Step 7 (Extract candidate next-actions), and Step 8 (Route) helpers are safe to use today; all nine produce intermediate output rather than vault writes.
+Do not invoke this skill end-to-end against a real vault. The Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), Step 5 (Generate frontmatter, fixed_domains), Step 6 (Generate wikilinks, fixed_domains), Step 7 (Extract candidate next-actions), Step 8 (Route), and Step 9 (NotebookLM integration) helpers are individually safe to use today as library APIs; the orchestrator that wires the 9 pipeline steps together and produces the spec's output contract has not yet landed.
 
 ## Spec references
 
@@ -518,13 +518,113 @@ result.mode                     # "fixed_domains" or "emergent"
 - `route()` has no filesystem side effects. The orchestrator handles `mkdir(parents=True, exist_ok=True)` at write time. This keeps Step 8 stateless and unit-testable.
 - Emergent theme-folder matching uses exact name plus a single slug variant (NFKD-normalized, lowercased, non-alphanumeric runs replaced with `-`). Fuzzy matching is deferred.
 
-## Pipeline (Step 9, planned)
+## Step 9: NotebookLM integration (opt-in, graceful)
 
-Documented for reference; not implemented yet. Will land in a subsequent commit with its own tests.
+Step 9 adds the assembled note as a source to a NotebookLM notebook per build spec lines 216-226. Opt-in (`config.skip_notebooklm` and `config.notebook_map` gates) and graceful (no failure ever blocks the pipeline; spec line 224 contract). Mode-agnostic: both fixed_domains and emergent use `classification.primary` as the lookup key in `config.notebook_map`.
 
-9. **NotebookLM integration** opt-in with graceful degradation.
+**Auth model and queue rationale:**
 
-Documented in detail in the M1 build spec. Multi-invocation paths (slash command, natural language, file drop, batch, external call) are designed for the full pipeline but not in scope for the current commit.
+The `notebooklm` CLI auth has two layers. CSRF tokens / session IDs expire on the order of minutes but the CLI auto-refreshes them. The underlying Google session cookies expire roughly every few weeks and require manual `notebooklm login`. The self-refresh handles the short-lived layer; we only see real failures when the deep cookies are dead.
+
+Two extensions over the bare spec (signed off 2026-04-30):
+
+1. **Auth precheck** via `notebooklm auth check --test` runs before any source add. Cheap, purpose-built, fails fast on dead cookies.
+2. **Persistent retry queue** at `<vault>/.vault-intake/nlm_queue/<sha1>.json`. When precheck fails or runtime returns an auth-error pattern (`Unauthorized`, `redirect to login`, `CSRF token (missing|expired)`, `SNlM0e not found`, `auth failed/expired/required`), the pending action is serialized as JSON. A separate `flush_nlm_queue()` library function drains the queue once the user runs `notebooklm login`. Non-auth failures (timeout, JSON parse error, source-count exhausted) are NOT queued because re-auth would not recover them.
+
+**Pipeline:**
+
+1. If `config.skip_notebooklm` is True, return `skipped`.
+2. Look up `classification.primary` in `config.notebook_map`; if missing, return `skipped`.
+3. If `note_path is None` (dry-run), return `skipped`.
+4. Run `notebooklm auth check --test`. If it returns nonzero, write a queue entry and return `failed=True, queued=True`.
+5. Run `notebooklm source list -n <id> --json` to count sources. If >= 50, return `failed` (no queue: this is not auth-recoverable). If >= 45, set `source_count_warning=True`.
+6. Run `notebooklm source add <path> -n <id> --json`. Parse the returned source ID (defensive parser tries top-level `id`, then `source_id`, then nested `source.{id,source_id}`).
+7. On any subprocess timeout / JSON parse error / unexpected exception: return `failed` without queue.
+8. On nonzero exit with auth-error stderr/stdout: write queue entry and return `failed=True, queued=True`.
+9. On nonzero exit with non-auth stderr/stdout: return `failed=True, queued=False`.
+
+**Result shape:** Frozen `NotebookLMResult` with seven fields:
+
+- `source_id: str | None`: set on successful add; None when skipped, failed, or queued.
+- `notebook_id: str | None`: resolved notebook ID; None when no mapping or `skip_notebooklm=True`.
+- `skipped: bool`: True for the no-op paths (config-disabled, missing mapping, dry-run, missing CLI).
+- `failed: bool`: True for any non-skipped non-success outcome (precheck-fail, source-count-exhausted, timeout, JSON parse error, runtime CLI error, unexpected exception).
+- `queued: bool`: True when the action was written to the retry queue (always implies `failed=True`). False on every other path including non-auth runtime failures.
+- `reason: str`: short audit string (e.g., `"added to nb-ops-id"`, `"auth precheck failed: Unauthorized"`, `"source count exhausted: 50/50"`).
+- `source_count_warning: bool`: True when source count >= 45 (Standard plan: 50 cap). Non-blocking.
+
+**Queue file shape (versioned):**
+
+```json
+{
+  "schema_version": 1,
+  "queued_at": "2026-04-30T...",
+  "note_path": "/abs/path/to/note.md",
+  "notebook_id": "nb-ops-id",
+  "classification_primary": "ops",
+  "retry_count": 0
+}
+```
+
+Dedup key is `(notebook_id, note_path)`; the filename is `sha1(notebook_id + "|" + note_path).hexdigest()`. Re-queuing the same `(notebook_id, note_path)` increments `retry_count` rather than creating a duplicate file.
+
+**`flush_nlm_queue` contract:**
+
+- Reads queue files from `<vault>/.vault-intake/nlm_queue/`.
+- Drops corrupt files, missing-note-file entries, and entries with the wrong `schema_version`.
+- Runs `auth check --test` once upfront. If auth still fails, returns immediately with all valid entries counted as `still_queued`.
+- For each remaining entry, attempts `source add`. On success: deletes the queue file. On failure: increments `retry_count` and rewrites.
+- Returns `FlushResult(processed, still_queued, dropped)`.
+
+The orchestrator wires the end-of-run UX surface (single line: "N items queued for NotebookLM; run `notebooklm login` then `vault-intake flush-nlm` to drain"); that lands in a separate session along with the orchestrator itself.
+
+**CLI invocation contract:**
+
+All calls use `subprocess.run` with `check=False`, `capture_output=True`, `text=True`, `timeout=30`, `env={"PYTHONIOENCODING": "utf-8", ...}` per the Windows gotcha that Rich emits Unicode that breaks the default Windows codepage.
+
+| Subcommand | Command line |
+|---|---|
+| Auth precheck | `notebooklm auth check --test` |
+| Source count | `notebooklm source list -n <id> --json` |
+| Source add | `notebooklm source add <path> -n <id> --json` |
+
+Markdown notes auto-detect as type `text` (content extracted inline). The defensive JSON parser handles both bare-list and `{"sources": [...]}` shapes for list, and tries `id`, `source_id`, and nested `source.{id,source_id}` for add. The CLI's exact response shape for file-uploaded sources is not authoritatively documented; the parser tolerates either form.
+
+The Python module `vault_intake.notebooklm` exposes `NotebookLMResult`, `FlushResult`, `integrate_notebooklm`, and `flush_nlm_queue`:
+
+```python
+from vault_intake.notebooklm import integrate_notebooklm, flush_nlm_queue
+
+result = integrate_notebooklm(
+    classification=classification,
+    frontmatter=frontmatter,         # accepted for parity; not mutated
+    config=config,
+    note_path=note_path,             # absolute Path, or None for dry-run
+    nlm_command="notebooklm",        # injectable for testing
+)
+result.source_id                     # str | None
+result.notebook_id                   # str | None
+result.skipped                       # bool
+result.failed                        # bool
+result.queued                        # bool
+result.reason                        # short audit string
+result.source_count_warning          # bool
+
+# Drain the persisted queue after the user re-authenticates:
+flush = flush_nlm_queue(config)
+flush.processed                      # int: queue entries successfully drained
+flush.still_queued                   # int: entries that failed again
+flush.dropped                        # int: corrupt files or missing notes
+```
+
+`NotebookLMResult` and `FlushResult` are frozen. The function returns a result; the orchestrator owns updates to `frontmatter.source_id` (via `dataclasses.replace`) when the result carries a non-None `source_id`.
+
+**v1 deliberate simplifications:**
+
+- The CLI's exact JSON response shape is not authoritatively documented for file-uploaded sources. The parser is defensive over likely shapes; if a future CLI version changes the shape further, the parser falls back to `JSONDecodeError` and the path returns `failed` (no queue, since this is not auth-recoverable).
+- Source-count warning threshold is hardcoded at 45 (Standard plan: 50 cap). A config knob is deferred until a Pro plan use case surfaces.
+- Retry-count cap is not enforced in v1; queued entries persist until drained. A v2 cap (e.g., drop after 5 retries) is deferred until dogfood reveals demand.
+- The orchestrator's end-of-run "N items queued" UX surface is not part of Step 9; that lands with the orchestrator session.
 
 ## Safety rules (consolidated, apply across all steps when implemented)
 
