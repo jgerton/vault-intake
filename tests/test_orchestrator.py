@@ -342,6 +342,15 @@ class TestAssembleFinalMarkdown:
         assert parsed["source_id"] == "src-roundtrip"
         assert parsed["schema_version"] == "1.0"
         assert parsed["domain"] == "ops"
+        # Lock the rest of the OS-wide baseline plus fixed_domains additions
+        # against delimiter/serialization regressions. Codex confirmation pass
+        # T1 PARTIAL 2026-04-30.
+        assert parsed["date"] == "2026-04-30"
+        assert parsed["type"] == "session"
+        assert parsed["tags"] == ["ops"]
+        assert parsed["notebook"] == ""
+        assert parsed["captured_at"] == "2026-04-30"
+        assert parsed["processed_by"] == "/vault-intake"
 
 
 # ---------------------------------------------------------------------------
@@ -792,6 +801,13 @@ class TestRunIntakeFixedDomainsStepNotImplementedCatch:
         assert result.frontmatter is None
         questions_blob = "\n".join(result.questions)
         assert "categorize_para" in questions_blob
+        # Cascade non-pollution: only Step 4 raised NotImplementedError;
+        # Steps 5/6 were dependency-blocked, not NotImplementedError-skipped,
+        # so they must NOT appear in the not_implemented questions list (the
+        # emergent cascade only fires under emergent mode). Codex confirmation
+        # pass T2 PARTIAL 2026-04-30.
+        assert "generate_frontmatter" not in questions_blob
+        assert "generate_wikilinks" not in questions_blob
 
     def test_step5_notimplemented_caught(self, tmp_path):
         vault = _make_fixed_domains_vault(tmp_path)
@@ -811,17 +827,27 @@ class TestRunIntakeFixedDomainsStepNotImplementedCatch:
     def test_step6_notimplemented_caught(self, tmp_path):
         vault = _make_fixed_domains_vault(tmp_path)
         config = _make_config(vault_path=vault)
+        text = (
+            "Working on launch-redesign ops project today. "
+            "Send the deck to Alice tomorrow. "
+            "Deploying ops infrastructure for launch-redesign work."
+        )
         with patch(
             "vault_intake.orchestrator.generate_wikilinks",
             side_effect=NotImplementedError("simulated"),
         ):
-            result = run_intake(_OPS_INPUT, config)
+            result = run_intake(text, config)
         # Steps 5, 7, 8, 9 still run successfully because they do not depend
         # on wikilinks output.
         assert result.frontmatter is not None
         assert result.wikilinks is None
         assert result.route is not None
         assert result.notebooklm is not None
+        # Step 7 explicitly succeeds; codex confirmation pass T2 PARTIAL
+        # 2026-04-30 asked for an explicit Step 7 assertion, not just a
+        # NextActionsResult-not-None check.
+        assert result.next_actions.gate_fired is True
+        assert len(result.next_actions.proposals) > 0
         questions_blob = "\n".join(result.questions)
         assert "generate_wikilinks" in questions_blob
 
