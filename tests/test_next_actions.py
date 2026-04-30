@@ -549,3 +549,129 @@ def test_bullet_formatted_imperatives_each_become_proposals():
 
     assert result.gate_fired is True
     assert len(result.proposals) >= 3
+
+
+# ---------------------------------------------------------------------------
+# Round 15: false-positive guards (Codex S1, S2, R1, R2 regression locks)
+# ---------------------------------------------------------------------------
+
+
+def test_descriptive_today_alone_does_not_fire_gate():
+    # Bare deictic "today" without an action signal is descriptive prose.
+    # Spec line 173 calls for skipping such content; firing here would
+    # create task debt from a journal entry.
+    result = extract_next_actions(
+        "Today I learned about Python decorators.",
+        _make_config(),
+    )
+
+    assert result.gate_fired is False
+    assert result.proposals == ()
+
+
+def test_descriptive_tomorrow_alone_does_not_fire_gate():
+    result = extract_next_actions(
+        "The review happened tomorrow in the example plan.",
+        _make_config(),
+    )
+
+    assert result.gate_fired is False
+    assert result.proposals == ()
+
+
+def test_descriptive_tonight_alone_does_not_fire_gate():
+    result = extract_next_actions(
+        "Tonight is the season finale of that show.",
+        _make_config(),
+    )
+
+    assert result.gate_fired is False
+    assert result.proposals == ()
+
+
+def test_deictic_date_paired_with_imperative_still_fires():
+    # When a deictic ("today", "tonight", "tomorrow") shares a sentence
+    # with an imperative or other signal, the date IS counted because
+    # the action context lifts it above pure description.
+    result = extract_next_actions(
+        "Send the deck to Alice tomorrow.",
+        _make_config(),
+    )
+
+    assert result.gate_fired is True
+    assert "date" in result.signals_detected
+    assert "imperative" in result.signals_detected
+
+
+def test_iso_date_alone_fires_gate_as_deadline():
+    # ISO dates are deadline-bearing and fire on their own (no other
+    # signal needed). Distinguishes them from bare deictics.
+    result = extract_next_actions(
+        "The cutoff is 2026-05-15.",
+        _make_config(),
+    )
+
+    assert result.gate_fired is True
+    assert "date" in result.signals_detected
+
+
+def test_descriptive_going_to_does_not_fire_gate():
+    # Bare "going to" is too broad: matches descriptive predictions
+    # like "is going to change" with no action intent. Future-intent
+    # signal requires a first-person or team subject pronoun.
+    result = extract_next_actions(
+        "The API is going to change next quarter.",
+        _make_config(),
+    )
+
+    assert "future_intent" not in result.signals_detected
+
+
+def test_first_person_going_to_still_fires_future_intent():
+    result = extract_next_actions(
+        "I am going to write the post-mortem.",
+        _make_config(),
+    )
+
+    assert result.gate_fired is True
+    assert "future_intent" in result.signals_detected
+
+
+def test_max_proposals_zero_returns_empty_result():
+    # Boundary case: max_proposals=0 should not produce any proposals,
+    # even when the text contains action signals.
+    result = extract_next_actions(
+        "Send the launch deck to Alice by Friday.",
+        _make_config(),
+        max_proposals=0,
+    )
+
+    assert result.proposals == ()
+    assert result.gate_fired is False
+
+
+def test_max_proposals_negative_returns_empty_result():
+    result = extract_next_actions(
+        "Send the launch deck to Alice.",
+        _make_config(),
+        max_proposals=-1,
+    )
+
+    assert result.proposals == ()
+    assert result.gate_fired is False
+
+
+def test_checkbox_bullet_imperative_fires_gate():
+    # Markdown task-list syntax `- [ ] action` is common; the bullet
+    # prefix plus checkbox must be stripped so the imperative verb is
+    # recognized as the first significant word.
+    text = (
+        "- [ ] Send the deck to Alice\n"
+        "- [x] Review the council notes\n"
+        "- [X] Schedule the follow-up call\n"
+    )
+    result = extract_next_actions(text, _make_config())
+
+    assert result.gate_fired is True
+    assert len(result.proposals) >= 3
+    assert all("imperative" in p.signal for p in result.proposals)

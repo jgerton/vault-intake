@@ -107,6 +107,10 @@ _IMPERATIVE_VERBS: frozenset[str] = frozenset({
 
 
 # Future-tense intent phrases, matched word-bounded and case-insensitive.
+# The "going to" pattern is restricted to first-person and team-subject
+# forms ("i'm going to", "i am going to", "we're going to", "we are going
+# to"). Bare "going to" is excluded because it produces false positives
+# on descriptive predictions like "The API is going to change."
 _FUTURE_INTENT_RE = re.compile(
     r"\b("
     r"we'll need to|i'll need to|"
@@ -114,19 +118,32 @@ _FUTURE_INTENT_RE = re.compile(
     r"i should|we should|"
     r"i need to|we need to|"
     r"i have to|we have to|"
-    r"i'm going to|we're going to|going to|"
+    r"i'm going to|we're going to|i am going to|we are going to|"
     r"i must|we must"
     r")\b",
     re.IGNORECASE,
 )
 
 
-# Date and deadline patterns. The first match in a sentence becomes the
-# `when` field on the resulting NextAction.
+# Date and deadline patterns. Two categories:
+#
+# 1. Deadline-bearing patterns (ISO date, "by Friday", "next week",
+#    "in 3 days", "by EOW", etc.) imply explicit time-targeting and
+#    fire the `date` signal on their own.
+# 2. Deictic patterns ("today", "tonight", "tomorrow") describe a
+#    moment without a deadline target. They populate the `when`
+#    annotation but only count as a `date` signal when the same
+#    sentence has another signal (imperative, future_intent,
+#    decision_point, or named_followup). Spec line 173 calls for
+#    skipping descriptive prose, so a bare deictic alone in a sentence
+#    like "Today I learned about Python." does not fire the gate.
 _ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
-_RELATIVE_DATE_RE = re.compile(
+_DEICTIC_DATE_RE = re.compile(
+    r"\b(tomorrow|tonight|today)\b",
+    re.IGNORECASE,
+)
+_DEADLINE_RELATIVE_RE = re.compile(
     r"\b("
-    r"tomorrow|tonight|today|"
     r"this\s+week|this\s+weekend|this\s+month|"
     r"next\s+week|next\s+weekend|next\s+month|"
     r"by\s+eow|by\s+eod|"
@@ -152,12 +169,21 @@ _IN_N_PERIOD_RE = re.compile(
     re.IGNORECASE,
 )
 
-_DATE_PATTERNS: tuple[re.Pattern[str], ...] = (
+# Deadline-bearing patterns fire `date` signal alone.
+_DEADLINE_DATE_PATTERNS: tuple[re.Pattern[str], ...] = (
     _ISO_DATE_RE,
-    _RELATIVE_DATE_RE,
+    _DEADLINE_RELATIVE_RE,
     _DAY_NAME_RE,
     _BY_MONTH_RE,
     _IN_N_PERIOD_RE,
+)
+
+# All date patterns in priority order for `when` annotation extraction.
+# Deadline patterns are checked first so they win on sentences that
+# contain both (e.g., "by Friday today" should annotate "by Friday").
+_DATE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    *_DEADLINE_DATE_PATTERNS,
+    _DEICTIC_DATE_RE,
 )
 
 
@@ -204,7 +230,11 @@ _NAMED_FOLLOWUP_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 # Bullet and ordered-list markers stripped from the start of each line.
-_BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+# Also strips an optional task-list checkbox after the bullet so input
+# like "- [ ] Send the deck" surfaces "Send" as the imperative.
+_BULLET_PREFIX_RE = re.compile(
+    r"^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?"
+)
 
 # Sentence walker: matches non-terminator runs followed by an optional
 # terminator. Used inside each line so list items do not bleed across.
@@ -234,7 +264,7 @@ def extract_next_actions(
     """
     del config  # accepted for orchestrator parity; unused in v1
 
-    if not text or not text.strip():
+    if not text or not text.strip() or max_proposals <= 0:
         return NextActionsResult(
             proposals=(),
             gate_fired=False,
@@ -245,14 +275,14 @@ def extract_next_actions(
     signals_seen: set[str] = set()
 
     for sentence in _iter_clauses(text):
+        if len(proposals) >= max_proposals:
+            break
         proposal = _analyze_sentence(sentence)
         if proposal is None:
             continue
         proposals.append(proposal)
         for signal in proposal.signal.split(" + "):
             signals_seen.add(signal)
-        if len(proposals) >= max_proposals:
-            break
 
     return NextActionsResult(
         proposals=tuple(proposals),
@@ -292,17 +322,23 @@ def _analyze_sentence(sentence: str) -> NextAction | None:
         signals.append("imperative")
     if _FUTURE_INTENT_RE.search(sentence):
         signals.append("future_intent")
-
-    when = _extract_date(sentence)
-    if when:
-        signals.append("date")
-
     if _matches_decision_point(sentence):
         signals.append("decision_point")
 
     where = _extract_named_followup(sentence)
     if where:
         signals.append("named_followup")
+
+    when = _extract_date(sentence)
+    if when:
+        # `date` only joins signals when this is a deadline-bearing
+        # match (ISO date, "by Friday", "next week", etc.) OR when the
+        # sentence already has another signal. A bare deictic alone
+        # ("Today I learned about Python.") does not fire the gate.
+        if _has_deadline_date(sentence) or signals:
+            signals.append("date")
+        else:
+            when = None
 
     if not signals:
         return None
@@ -337,6 +373,10 @@ def _extract_date(sentence: str) -> str | None:
         if earliest is None or match.start() < earliest[0]:
             earliest = (match.start(), match.group(0))
     return earliest[1] if earliest is not None else None
+
+
+def _has_deadline_date(sentence: str) -> bool:
+    return any(p.search(sentence) is not None for p in _DEADLINE_DATE_PATTERNS)
 
 
 def _matches_decision_point(sentence: str) -> bool:
