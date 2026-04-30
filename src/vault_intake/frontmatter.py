@@ -28,7 +28,7 @@ import yaml
 
 from .classify import ClassificationResult
 from .config import Config
-from .detect import DetectionResult
+from .detect import ContentType, DetectionResult
 from .para import ParaResult
 from .refine import RefinedContent
 
@@ -72,6 +72,26 @@ _SCHEMA_VERSION = "1.0"
 
 _H1_PATTERN = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 _SENTENCE_END_PATTERN = re.compile(r"[.!?]+\s")
+
+
+# Translation from Step 1's 7-value detection enum to the
+# fixed_domains frontmatter's 8-value type enum (build spec line 128).
+# `document` and `transcription` are detection-stage signals that
+# describe structure or format rather than the destination category,
+# so both fall back to `note`. The five overlapping values pass
+# through unchanged. `insight`, `workflow`, and `project` are not
+# derivable from detection alone: `project` is set by the PARA-
+# project override below, and `insight` plus `workflow` remain user-
+# set at the skill orchestrator's confirmation step.
+_DETECTION_TO_FRONTMATTER_TYPE: dict[ContentType, NoteType] = {
+    "session": "session",
+    "document": "note",
+    "reference": "reference",
+    "context": "context",
+    "prompt": "prompt",
+    "transcription": "note",
+    "note": "note",
+}
 
 
 @dataclass(frozen=True)
@@ -161,6 +181,7 @@ def generate_frontmatter(
     original_ref = (
         _ORIGINAL_REF_MARKER if refinement is not None and refinement.changed else ""
     )
+    note_type = _derive_note_type(detection, para)
 
     return Frontmatter(
         schema_version=_SCHEMA_VERSION,
@@ -172,13 +193,26 @@ def generate_frontmatter(
         original_ref=original_ref,
         title=title,
         date=note_date,
-        type=detection.type,
+        type=note_type,
         domain=classification.primary,
         tags=tags,
         notebook=notebook,
         source_id="",
         project=project,
     )
+
+
+def _derive_note_type(detection: DetectionResult, para: ParaResult) -> NoteType:
+    """Pick the fixed_domains frontmatter `type` field value.
+
+    PARA-project overrides detection: when para categorizes a note as
+    a project, the frontmatter type follows so routing and type stay
+    consistent. Otherwise the detection type is translated through
+    `_DETECTION_TO_FRONTMATTER_TYPE`.
+    """
+    if para.category == "project":
+        return "project"
+    return _DETECTION_TO_FRONTMATTER_TYPE[detection.type]
 
 
 def _build_title(text: str, *, fallback_date: str) -> str:

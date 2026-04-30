@@ -513,7 +513,7 @@ def test_to_yaml_round_trips_with_pyyaml(tmp_path: Path) -> None:
     assert loaded["original_ref"] == "## Captura original"
     assert loaded["title"] == "launch-redesign-retro"
     assert loaded["date"] == "2026-04-29"
-    assert loaded["type"] == "session"
+    assert loaded["type"] == "project"  # PARA project overrides detection's "session"
     assert loaded["domain"] == "ops"
     assert loaded["tags"] == ["ops", "branding"]
     assert loaded["notebook"] == "nb-ops-id"
@@ -555,3 +555,159 @@ def test_to_yaml_emits_empty_string_for_none_confidence(tmp_path: Path) -> None:
     yaml_text = fm.to_yaml()
     loaded = yaml.safe_load(yaml_text)
     assert loaded["confidence"] == ""
+
+
+@pytest.mark.parametrize(
+    "detection_type,expected_frontmatter_type",
+    [
+        ("session", "session"),
+        ("document", "note"),
+        ("reference", "reference"),
+        ("context", "context"),
+        ("prompt", "prompt"),
+        ("transcription", "note"),
+        ("note", "note"),
+    ],
+)
+def test_detection_type_translates_to_frontmatter_type(
+    tmp_path: Path,
+    detection_type: str,
+    expected_frontmatter_type: str,
+) -> None:
+    config = _make_config(tmp_path)
+
+    fm = generate_frontmatter(
+        text="Body.",
+        detection=_make_detection(type=detection_type),
+        refinement=None,
+        classification=_make_classification(),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-04-29",
+    )
+
+    assert fm.type == expected_frontmatter_type
+
+
+@pytest.mark.parametrize(
+    "detection_type",
+    ["session", "document", "reference", "context", "prompt", "transcription", "note"],
+)
+def test_para_project_overrides_detection_type(
+    tmp_path: Path,
+    detection_type: str,
+) -> None:
+    config = _make_config(tmp_path)
+    para = _make_para(
+        category="project",
+        project_slug="launch-redesign",
+        signals=("project_slug_match",),
+    )
+
+    fm = generate_frontmatter(
+        text="Body.",
+        detection=_make_detection(type=detection_type),
+        refinement=None,
+        classification=_make_classification(),
+        para=para,
+        config=config,
+        captured_at="2026-04-29",
+    )
+
+    assert fm.type == "project"
+    assert fm.project == "launch-redesign"
+
+
+def test_insight_and_workflow_frontmatter_types_are_valid(tmp_path: Path) -> None:
+    # `insight` and `workflow` are not auto-derived in v1: the rule-based
+    # builder produces only `note`, `session`, `reference`, `context`,
+    # `prompt`, and `project`. The skill orchestrator surfaces `insight`
+    # and `workflow` to the user at confirmation time. The Frontmatter
+    # dataclass must still accept both as valid Literal values so user-
+    # set overrides round-trip cleanly.
+    fm = Frontmatter(
+        schema_version="1.0",
+        source_type="paste",
+        source_uri="",
+        captured_at="2026-04-29",
+        processed_by="/vault-intake",
+        confidence=0.8,
+        original_ref="",
+        title="lesson-learned",
+        date="2026-04-29",
+        type="insight",
+        domain="ops",
+        tags=("ops",),
+        notebook="",
+        source_id="",
+        project="",
+    )
+    yaml_text = fm.to_yaml()
+    assert yaml.safe_load(yaml_text)["type"] == "insight"
+
+    fm_wf = Frontmatter(
+        schema_version="1.0",
+        source_type="paste",
+        source_uri="",
+        captured_at="2026-04-29",
+        processed_by="/vault-intake",
+        confidence=0.8,
+        original_ref="",
+        title="release-checklist",
+        date="2026-04-29",
+        type="workflow",
+        domain="ops",
+        tags=("ops",),
+        notebook="",
+        source_id="",
+        project="",
+    )
+    assert yaml.safe_load(fm_wf.to_yaml())["type"] == "workflow"
+
+
+def test_to_yaml_field_order_is_canonical(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, notebook_map={"ops": "nb-ops-id"})
+
+    fm = generate_frontmatter(
+        text="# Order check\n\nBody.",
+        detection=_make_detection(type="note"),
+        refinement=None,
+        classification=_make_classification(
+            primary="ops", secondary=("branding",), confidence=0.8
+        ),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-04-29",
+    )
+
+    yaml_text = fm.to_yaml()
+    expected_order = [
+        "schema_version",
+        "source_type",
+        "source_uri",
+        "captured_at",
+        "processed_by",
+        "confidence",
+        "original_ref",
+        "title",
+        "date",
+        "type",
+        "domain",
+        "tags",
+        "notebook",
+        "source_id",
+        "project",
+    ]
+    # Match each key at start of line so the bare "type:" search does
+    # not falsely match inside "source_type:".
+    actual_keys = [
+        line.split(":", 1)[0]
+        for line in yaml_text.splitlines()
+        if line and not line.startswith((" ", "-"))
+    ]
+    assert actual_keys == expected_order, (
+        f"YAML field order drifted from canonical baseline.\n"
+        f"  expected: {expected_order}\n"
+        f"  actual:   {actual_keys}\n"
+        f"  yaml:     {yaml_text!r}"
+    )

@@ -262,11 +262,26 @@ Step 5 builds the canonical frontmatter for the captured note per build spec lin
 Rule-based deterministic builder. Inputs:
 
 - `text`: the input body, used by the title heuristic (callers pass the refined body when refinement applied, otherwise the original).
-- `detection: DetectionResult`: provides `type` (closed enum of 8) for the frontmatter `type` field.
+- `detection: DetectionResult`: drives the frontmatter `type` field through the translation table below; `document` and `transcription` map to `note` because both describe stage rather than destination.
 - `refinement: RefinedContent | None`: None when Step 2 was skipped (already-structured types or `refinement_enabled=False`); otherwise carries `changed`. When `changed` is True, `original_ref` is set to `## Captura original` so downstream consumers know to expect the verbatim block; otherwise empty.
 - `classification: ClassificationResult`: `primary` populates `domain`; `(primary,) + secondary` populates `tags` (capped at 5); `confidence` populates the OS-wide `confidence` field. When classification is uncertain, tags are emitted empty so the user fills in at confirmation.
-- `para: ParaResult`: when category is `project`, `project_slug` populates the `project` field; otherwise empty.
+- `para: ParaResult`: when category is `project`, `project_slug` populates the `project` field and the frontmatter `type` overrides to `project` regardless of detection so routing and type stay consistent; otherwise the project field is empty.
 - `config: Config`: `notebook_map` resolves `domain` to `notebook` (empty string on miss); `mode` gates the function.
+
+Type derivation table (build spec line 128's 8-value enum):
+
+| Detection type | Frontmatter type | Notes |
+|---|---|---|
+| `session` | `session` | passes through |
+| `document` | `note` | document is structural, not destination |
+| `reference` | `reference` | passes through |
+| `context` | `context` | passes through |
+| `prompt` | `prompt` | passes through |
+| `transcription` | `note` | refinement-stage signal, not destination |
+| `note` | `note` | passes through |
+| any (PARA project override) | `project` | when `para.category == "project"` |
+
+`insight` and `workflow` are valid frontmatter types but are not auto-derived in v1; the skill orchestrator surfaces them as user-selectable options at confirmation. v2 may add heuristics.
 
 Capture metadata is keyword-only: `source_type` (default `"paste"`), `source_uri` (default `""`), `captured_at` (default today's date in ISO format).
 
