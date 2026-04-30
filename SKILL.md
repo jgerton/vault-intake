@@ -1,11 +1,11 @@
 ---
 name: vault-intake
-description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), 6 (Generate wikilinks, fixed_domains track only), and 7 (Extract candidate next-actions, mode-agnostic) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Step 5 builds a frozen `Frontmatter` dataclass populated from the upstream pipeline outputs plus capture metadata, emitting the OS-wide canonical baseline (architecture plan Section 1.4.1) and the fixed_domains track-specific additions (build spec lines 122-135) with a kebab-case title heuristic, capped tags, and a `to_yaml()` serializer; emergent mode raises NotImplementedError. Step 6 walks the vault, parses each markdown file's frontmatter, and produces ranked wikilink proposals (cross-domain weight 4, active project weight 3, concept overlap weight 2 at a 2-token floor, empty backlog markers from typed `[[X]]` weight 1) capped at 7 with dedupe by target and recency-then-alphabetical tiebreaks; emergent mode raises NotImplementedError. Step 7 scans the body for action signals (imperatives, future-tense intent, dates and deadlines, decision points, named follow-ups), produces a seed list of candidate next-actions with VColey field annotations, and renders them as plain bullets under "Possíveis próximos passos"; mode-agnostic (no NotImplementedError gate) because action-signal detection is content-driven, not vault-driven. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," "categorize vault-intake PARA," "generate vault-intake frontmatter," "generate vault-intake wikilinks," or "extract vault-intake next-actions" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Steps 8 through 9 (route, NotebookLM) are not yet implemented and will land in subsequent commits.
+description: Memory Branch M1 work-in-progress. Step 0 (Bootstrap: config resolve and validate) and pipeline Steps 1 (Detect content type), 2 (Refine), 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), 6 (Generate wikilinks, fixed_domains track only), 7 (Extract candidate next-actions, mode-agnostic), and 8 (Route to destination folder, both modes) are implemented. Step 0 parses a Second-Brain vault's CLAUDE.md `## Vault Config` YAML block, enforces the Option Z mode pair lock, and returns resolved JSON. Step 1 classifies raw input into one of seven closed-enum content types and surfaces an uncertainty flag when signals overlap. Step 2 produces a readability-pass refinement of oral or brain-dump content while preserving the verbatim original. Step 3 classifies fixed_domains-mode content into a primary domain plus secondary tags using rule-based keyword matching, with a configurable confidence threshold and an uncertainty flag for caller-driven confirmation. Step 4 categorizes content into one of four PARA buckets (project, area, resource, archive) using rule-based heuristics over the project inventory under `vault_path/projects/`, the upstream detection result, and superseded-decision phrasing; emergent mode skips PARA entirely and raises NotImplementedError on direct call. Step 5 builds a frozen `Frontmatter` dataclass populated from the upstream pipeline outputs plus capture metadata, emitting the OS-wide canonical baseline (architecture plan Section 1.4.1) and the fixed_domains track-specific additions (build spec lines 122-135) with a kebab-case title heuristic, capped tags, and a `to_yaml()` serializer; emergent mode raises NotImplementedError. Step 6 walks the vault, parses each markdown file's frontmatter, and produces ranked wikilink proposals (cross-domain weight 4, active project weight 3, concept overlap weight 2 at a 2-token floor, empty backlog markers from typed `[[X]]` weight 1) capped at 7 with dedupe by target and recency-then-alphabetical tiebreaks; emergent mode raises NotImplementedError. Step 7 scans the body for action signals (imperatives, future-tense intent, dates and deadlines, decision points, named follow-ups), produces a seed list of candidate next-actions with VColey field annotations, and renders them as plain bullets under "Possíveis próximos passos"; mode-agnostic (no NotImplementedError gate) because action-signal detection is content-driven, not vault-driven. Step 8 routes notes to a destination folder via the spec's (type, PARA) destination table in fixed_domains mode and via theme-folder lookup with `_inbox/` fallback in emergent mode; the function is a path-suggestion only with no filesystem side effects, returning a frozen `RouteResult` carrying the destination, optional project link target, archive flag, inbox-fallback flag, section-update flag, audit reason, and mode. Use this skill when the user asks to "validate vault config," "check vault CLAUDE.md," "resolve vault-intake config," "detect vault-intake content type," "refine vault-intake content," "classify vault-intake content," "categorize vault-intake PARA," "generate vault-intake frontmatter," "generate vault-intake wikilinks," "extract vault-intake next-actions," or "route vault-intake content" against specific input. Do not use this skill for general capture, intake, or routing tasks; the spec's pipeline Step 9 (NotebookLM) is not yet implemented and will land in subsequent commits.
 ---
 
 # vault-intake
 
-Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), 6 (Generate wikilinks, fixed_domains track only), and 7 (Extract candidate next-actions, mode-agnostic) are implemented and usable; Steps 8 through 9 remain. Emergent-mode classification, emergent routing, the emergent frontmatter shape, and emergent-mode wikilinks are parallel tracks that land in separate sessions once fixed_domains stabilizes. Step 7 is the first mode-agnostic step in the pipeline.
+Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universal capture skill for Second-Brain vaults. The spec's pipeline runs Steps 1 through 9; Step 0 (Bootstrap: config resolve and validate) is a precondition implemented as part of this skill, not part of the numbered pipeline. Step 0 and pipeline Steps 1, 2, 3 (Classify, fixed_domains mode only), 4 (PARA category, fixed_domains/para mode only), 5 (Generate frontmatter, fixed_domains track only), 6 (Generate wikilinks, fixed_domains track only), 7 (Extract candidate next-actions, mode-agnostic), and 8 (Route to destination folder, both modes) are implemented and usable; Step 9 remains. Emergent-mode classification, the emergent frontmatter shape, and emergent-mode wikilinks are parallel tracks that land in separate sessions once fixed_domains stabilizes. Step 7 was the first mode-agnostic step; Step 8 is the first step shipping both modes simultaneously (emergent routing only needs theme-folder lookup with inbox fallback, which is small enough to ship in the same commit as fixed_domains).
 
 ## Status
 
@@ -19,10 +19,10 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 5. Generate frontmatter | Implemented (fixed_domains track only; emergent raises NotImplementedError) |
 | 6. Generate wikilinks | Implemented (fixed_domains track only; emergent raises NotImplementedError) |
 | 7. Extract candidate next-actions | Implemented (mode-agnostic; both modes share the same code path) |
-| 8. Route to destination folder | Not implemented |
+| 8. Route to destination folder | Implemented (both modes; path-suggestion only, no filesystem side effects) |
 | 9. NotebookLM integration | Not implemented |
 
-Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), Step 5 (Generate frontmatter, fixed_domains), Step 6 (Generate wikilinks, fixed_domains), and Step 7 (Extract candidate next-actions) helpers are safe to use today; all eight produce intermediate output rather than vault writes.
+Do not invoke this skill end-to-end against a real vault. Only the Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), Step 5 (Generate frontmatter, fixed_domains), Step 6 (Generate wikilinks, fixed_domains), Step 7 (Extract candidate next-actions), and Step 8 (Route) helpers are safe to use today; all nine produce intermediate output rather than vault writes.
 
 ## Spec references
 
@@ -440,14 +440,91 @@ The `NextAction` and `NextActionsResult` dataclasses are frozen.
 - `effort` and `waiting_on` are not extracted in v1; both are always `None`. Extraction lands in v2 if dogfood demand surfaces.
 - The `config` argument is accepted for orchestrator parity with Steps 3-6 but is not consulted in v1; both `fixed_domains` and `emergent` produce identical output.
 
-## Pipeline (Steps 8 through 9, planned)
+## Step 8: Route to destination folder (mode-dependent)
 
-Documented for reference; not implemented yet. Each will land in subsequent commits with its own tests. Steps 1 through 7 are described in their own sections above.
+Step 8 returns a path-suggestion for where the assembled note should land per build spec lines 184-214. The function is pure: it has no filesystem side effects (no folder creation, no file writes). The skill orchestrator handles the actual write at session-end confirmation, including `mkdir(parents=True, exist_ok=True)` for any nonexistent destination folder.
 
-8. **Route to destination folder** mode-dependent.
+Step 8 is the first dual-mode step: both `fixed_domains` and `emergent` ship in the same commit. The function-side gate is unconditional; the orchestrator picks whether to invoke. In `fixed_domains` mode, `para` is required (raises `ValueError` if `None`); in `emergent` mode, `para` is ignored.
+
+**fixed_domains/para mode (v1, implemented):**
+
+Routes via the spec's (type, PARA) destination table. The routing key uses the canonical `frontmatter.type` (set by Step 5) for most cases, but disambiguates the PARA-project override using `detection.type` so spec line 198's context+project case (section update on `projects/{slug}.md`) stays distinct from spec lines 192/201's session+project and note+project cases (sessions/ + project link).
+
+| Frontmatter type | PARA category | Destination | Notes |
+|---|---|---|---|
+| `session` | area | `sessions/` | n/a |
+| `insight` | any | `insights/` | n/a |
+| `workflow` | any | `workflows/` | n/a |
+| `prompt` | any | `prompts/` | n/a |
+| `context` | area | `context/` | n/a |
+| `reference` | resource | `references/` | n/a |
+| `note` | area | `sessions/` | spec line 200 treats note as session-equivalent |
+| `project` (PARA-project override fired) | project | varies | see below |
+
+When the PARA-project override fires (`para.category == "project"`, so Step 5 sets `frontmatter.type == "project"`), routing uses `detection.type`:
+
+| Detection type | Destination | Project link target | Section update |
+|---|---|---|---|
+| `context` | `projects/{slug}.md` | `projects/{slug}.md` | True |
+| `session` | `sessions/` | `projects/{slug}.md` | False |
+| `note` | `sessions/` | `projects/{slug}.md` | False |
+| any other | `sessions/` | `projects/{slug}.md` | False |
+
+Archive PARA (`para.category == "archive"`) does not auto-route per spec line 203. The function sets `archive_flagged=True` and routes the destination to the canonical default folder for the frontmatter type (e.g., session → `sessions/`, insight → `insights/`) so the orchestrator can offer the user "route here, or move to archive/."
+
+Unlisted (frontmatter.type, PARA) combinations (e.g., `reference` + `area`, `session` + `resource`) fall back to `_inbox/` with `inbox_fallback=True` and a reason string capturing the unlisted combo for audit. v1 prefers permissive fallback over a strict raise so the pipeline can complete and the user can resolve manually.
+
+**emergent mode (v1, implemented):**
+
+Routes by theme. The function reads `classification.primary` (the inferred theme) and walks `vault_path.iterdir()` looking for a folder whose name matches the theme exactly or after slugification. Underscore-prefixed system folders (`_inbox`, `_sinteses`) are excluded from theme matching, so a theme literally named "inbox" cannot collide with the system inbox. When a folder matches, route there. When no folder matches, route to `vault_path / "_inbox"` with `inbox_fallback=True` (spec lines 209-210). Folder creation for new themes is a separate, intentional consolidation step driven by `/status` review or a future `/consolidate` command, not by intake.
+
+`para` is ignored in emergent mode. If a caller passes a `ParaResult` it is silently disregarded.
+
+**Result shape:** Frozen `RouteResult` with seven fields:
+
+- `destination: Path`: absolute folder Path, or absolute file Path when `is_section_update=True`
+- `project_link_target: Path | None`: set for PARA-project routing (session+project, context+project, note+project) so the orchestrator can append a wikilink to the project hub file; `None` otherwise
+- `archive_flagged: bool`: True when `para.category == "archive"`; orchestrator surfaces a confirmation prompt rather than auto-routing
+- `inbox_fallback: bool`: True when destination is `_inbox/` (unlisted fixed_domains combo, or emergent theme without folder)
+- `is_section_update: bool`: True for context+project; orchestrator appends a section to `projects/{slug}.md` rather than creating a new file
+- `reason: str`: short human-readable audit string (e.g., `"type=session, para=area, dest=sessions/"`)
+- `mode: Mode`: `"fixed_domains"` or `"emergent"`
+
+The Python module `vault_intake.route` exposes `RouteResult` and `route`:
+
+```python
+from vault_intake.route import route
+
+result = route(
+    detection=detection,
+    classification=classification,
+    para=para,                  # required in fixed_domains; ignored in emergent
+    frontmatter=frontmatter,
+    config=config,
+)
+result.destination              # absolute Path (folder, or .md file when is_section_update)
+result.project_link_target      # Path | None
+result.archive_flagged          # bool
+result.inbox_fallback           # bool
+result.is_section_update        # bool
+result.reason                   # short audit string
+result.mode                     # "fixed_domains" or "emergent"
+```
+
+**v1 deliberate simplifications:**
+
+- Spec line 199 lists `references/` OR `pesquisa/` as the reference destination. v1 always routes to `references/`; Portuguese localization (`pesquisa/`) is deferred until a language-aware routing knob is requested.
+- Synthesis documents (the `/synth` artifacts per the dossier) are spec'd to live in `_sinteses/` regardless of mode (spec line 214). v1 has no `synthesis` content type, so this rule is deferred until the type lands.
+- `route()` has no filesystem side effects. The orchestrator handles `mkdir(parents=True, exist_ok=True)` at write time. This keeps Step 8 stateless and unit-testable.
+- Emergent theme-folder matching uses exact name plus a single slug variant (NFKD-normalized, lowercased, non-alphanumeric runs replaced with `-`). Fuzzy matching is deferred.
+
+## Pipeline (Step 9, planned)
+
+Documented for reference; not implemented yet. Will land in a subsequent commit with its own tests.
+
 9. **NotebookLM integration** opt-in with graceful degradation.
 
-Each step is documented in detail in the M1 build spec. Multi-invocation paths (slash command, natural language, file drop, batch, external call) are designed for the full pipeline but not in scope for the current commit.
+Documented in detail in the M1 build spec. Multi-invocation paths (slash command, natural language, file drop, batch, external call) are designed for the full pipeline but not in scope for the current commit.
 
 ## Safety rules (consolidated, apply across all steps when implemented)
 
