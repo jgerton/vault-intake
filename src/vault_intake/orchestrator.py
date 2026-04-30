@@ -44,6 +44,8 @@ inputs.
 from __future__ import annotations
 
 import dataclasses
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -469,9 +471,244 @@ def run_intake(
     )
 
 
+# ---------------------------------------------------------------------------
+# confirm_and_write (Phase 2 entrypoint, post-confirmation file write)
+# ---------------------------------------------------------------------------
+
+
+def confirm_and_write(
+    intake_run: IntakeRun,
+    config: Config,
+    *,
+    nlm_command: str = "notebooklm",
+    overwrite: bool = False,
+) -> IntakeRun:
+    """Write the confirmed intake run to disk, then re-invoke Step 9 live.
+
+    Mechanical: never prompts. The CLI wrapper resolves any uncertainty
+    (title overrides, collision choice) before calling this function.
+
+    Two paths, branching on `intake_run.route.is_section_update`:
+
+    - Regular write: `{frontmatter.title}.md` placed at
+      `route.destination` (a folder). Atomic via temp file plus
+      `os.replace`. Raises `FileExistsError` when the target exists
+      unless `overwrite=True`. Re-invokes `integrate_notebooklm` with
+      the written `note_path`. On non-None `source_id`, mutates
+      frontmatter via `dataclasses.replace`, re-renders final markdown,
+      and re-writes the file atomically.
+
+    - Section update: `route.destination` IS the file path (existing
+      project hub). Appends a `## {title}` section plus optional
+      `## Captura original` block. Raises `FileNotFoundError` when the
+      destination does not exist. Live Step 9 is skipped (the project
+      hub may already be a NotebookLM source; re-adding would create
+      duplicates).
+
+    Defense in depth (spec safety rule 6): the destination must be
+    inside `config.vault_path`. Raises `ValueError` otherwise even
+    though `route()` already constrains.
+
+    `queued_nlm_count` carries forward from the input IntakeRun and
+    increments by one when the live Step 9 result has `queued=True`.
+    """
+    if intake_run.route is None:
+        raise ValueError(
+            "confirm_and_write requires intake_run.route to be set; got None"
+        )
+    if intake_run.frontmatter is None:
+        raise ValueError(
+            "confirm_and_write requires intake_run.frontmatter to be set; got None"
+        )
+
+    _check_destination_inside_vault(
+        intake_run.route.destination, config.vault_path
+    )
+
+    if intake_run.route.is_section_update:
+        return _confirm_and_write_section_update(intake_run)
+    return _confirm_and_write_regular(
+        intake_run, config, nlm_command=nlm_command, overwrite=overwrite
+    )
+
+
+def _check_destination_inside_vault(destination: Path, vault_path: Path) -> None:
+    """Raise ValueError unless `destination` is inside `vault_path`.
+
+    Resolves both paths so symlink trickery cannot route writes outside
+    the vault. The vault folder itself is treated as inside (a no-op
+    `relative_to(self)` returns `Path('.')`).
+    """
+    resolved_dest = destination.resolve()
+    resolved_vault = vault_path.resolve()
+    if not resolved_dest.is_relative_to(resolved_vault):
+        raise ValueError(
+            f"destination {destination} is not inside vault_path {vault_path}"
+        )
+
+
+def _atomic_write(target: Path, content: str) -> None:
+    """Write `content` to `target` atomically via temp file plus os.replace."""
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
+
+
+def _confirm_and_write_regular(
+    intake_run: IntakeRun,
+    config: Config,
+    *,
+    nlm_command: str,
+    overwrite: bool,
+) -> IntakeRun:
+    assert intake_run.route is not None  # narrowed by caller
+    assert intake_run.frontmatter is not None  # narrowed by caller
+    assert intake_run.classification is not None, (
+        "regular write requires a classification; orchestrator skips routing without one"
+    )
+
+    target_dir = intake_run.route.destination
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_file = target_dir / f"{intake_run.frontmatter.title}.md"
+
+    if target_file.exists() and not overwrite:
+        raise FileExistsError(f"target file already exists: {target_file}")
+
+    _atomic_write(target_file, intake_run.final_markdown)
+
+    # Re-invoke Step 9 against the written path.
+    live_result = integrate_notebooklm(
+        classification=intake_run.classification,
+        frontmatter=intake_run.frontmatter,
+        config=config,
+        note_path=target_file,
+        nlm_command=nlm_command,
+    )
+
+    new_frontmatter = intake_run.frontmatter
+    new_final_markdown = intake_run.final_markdown
+    if live_result.source_id:
+        new_frontmatter = dataclasses.replace(
+            intake_run.frontmatter, source_id=live_result.source_id
+        )
+        new_final_markdown = _replace_frontmatter_block(
+            intake_run.final_markdown, new_frontmatter
+        )
+        _atomic_write(target_file, new_final_markdown)
+
+    queued_increment = 1 if live_result.queued else 0
+
+    return dataclasses.replace(
+        intake_run,
+        frontmatter=new_frontmatter,
+        final_markdown=new_final_markdown,
+        notebooklm=live_result,
+        written_path=target_file,
+        queued_nlm_count=intake_run.queued_nlm_count + queued_increment,
+    )
+
+
+def _confirm_and_write_section_update(intake_run: IntakeRun) -> IntakeRun:
+    assert intake_run.route is not None
+    assert intake_run.frontmatter is not None
+
+    target = intake_run.route.destination
+    if not target.exists():
+        raise FileNotFoundError(
+            f"section-update target does not exist: {target}"
+        )
+
+    section_md = _build_section_markdown(intake_run)
+    existing = target.read_text(encoding="utf-8")
+    new_content = existing.rstrip() + "\n\n" + section_md
+    if not new_content.endswith("\n"):
+        new_content += "\n"
+    _atomic_write(target, new_content)
+
+    skipped_result = NotebookLMResult(
+        source_id=None,
+        notebook_id=None,
+        skipped=True,
+        failed=False,
+        queued=False,
+        reason="section update: existing project hub not re-added to NotebookLM",
+        source_count_warning=False,
+    )
+
+    return dataclasses.replace(
+        intake_run,
+        notebooklm=skipped_result,
+        written_path=target,
+    )
+
+
+def _replace_frontmatter_block(markdown: str, frontmatter: Frontmatter) -> str:
+    """Swap the YAML block in `markdown` for the rendered `frontmatter`.
+
+    Relies on the fact that `assemble_final_markdown` always emits
+    `---\\n{yaml}---\\n` as the leading block. The rest of the document
+    (body plus optional trailing sections) is preserved verbatim.
+    """
+    new_yaml = frontmatter.to_yaml()
+    return re.sub(
+        r"\A---\n.*?\n---\n",
+        f"---\n{new_yaml}---\n",
+        markdown,
+        count=1,
+        flags=re.DOTALL,
+    )
+
+
+def _build_section_markdown(intake_run: IntakeRun) -> str:
+    """Render the body of a section appended to a project hub.
+
+    Layout: `## {title}` heading, then the post-refinement body, then an
+    optional `## Captura original` block when refinement.changed.
+    Next-actions are intentionally omitted from the appended section
+    (they remain accessible via `IntakeRun.next_actions` for the CLI).
+    """
+    assert intake_run.frontmatter is not None
+    body = _extract_body(intake_run)
+    parts = [f"## {intake_run.frontmatter.title}", "", body.strip()]
+    if intake_run.refinement is not None and intake_run.refinement.changed:
+        parts.extend(
+            ["", "## Captura original", "", intake_run.refinement.original.strip()]
+        )
+    return "\n".join(parts)
+
+
+def _extract_body(intake_run: IntakeRun) -> str:
+    """Recover the body text used to assemble `final_markdown`."""
+    if intake_run.refinement is not None:
+        return intake_run.refinement.refined
+    after_yaml = re.sub(
+        r"\A---\n.*?\n---\n+",
+        "",
+        intake_run.final_markdown,
+        count=1,
+        flags=re.DOTALL,
+    )
+    # Trim trailing sections so the body is just the user content.
+    parts = re.split(
+        r"\n## (?:Possíveis próximos passos|Captura original)\n",
+        after_yaml,
+        maxsplit=1,
+    )
+    return parts[0].rstrip()
+
+
 __all__ = [
     "IntakeRun",
     "assemble_final_markdown",
     "collect_questions",
+    "confirm_and_write",
     "run_intake",
 ]
