@@ -21,8 +21,9 @@ Memory Branch Milestone 1 (M1) skill, in progress. The full design is a universa
 | 7. Extract candidate next-actions | Implemented (mode-agnostic; both modes share the same code path) |
 | 8. Route to destination folder | Implemented (both modes; path-suggestion only, no filesystem side effects) |
 | 9. NotebookLM integration | Implemented (mode-agnostic; opt-in with graceful degradation; auth precheck and persistent retry queue) |
+| Orchestrator (dry-run) | Implemented (fixed_domains end-to-end; emergent-mode runs degrade gracefully via NotImplementedError catch; file writes and CLI wrapper not yet) |
 
-Do not invoke this skill end-to-end against a real vault. The Step 0 (Bootstrap), Step 1 (Detect content type), Step 2 (Refine), Step 3 (Classify, fixed_domains), Step 4 (PARA, fixed_domains/para), Step 5 (Generate frontmatter, fixed_domains), Step 6 (Generate wikilinks, fixed_domains), Step 7 (Extract candidate next-actions), Step 8 (Route), and Step 9 (NotebookLM integration) helpers are individually safe to use today as library APIs; the orchestrator that wires the 9 pipeline steps together and produces the spec's output contract has not yet landed.
+The orchestrator wires Steps 0-9 into a single `run_intake(input_text, config, ...) -> IntakeRun` entrypoint that returns the spec's output contract per build spec lines 228-243. It is dry-run only in v1: `IntakeRun.written_path` is always None, and Step 9 always runs with `note_path=None` (returns a `skipped("dry-run...")` result). A separate `confirm_and_write` function for the actual file write plus live Step 9 invocation lands in a follow-up commit this same session. Until then, library helpers remain individually safe to use, and `run_intake` is the recommended end-to-end entrypoint for dry-run dogfood against a real vault config.
 
 ## Spec references
 
@@ -625,6 +626,72 @@ flush.dropped                        # int: corrupt files or missing notes
 - Source-count warning threshold is hardcoded at 45 (Standard plan: 50 cap). A config knob is deferred until a Pro plan use case surfaces.
 - Retry-count cap is not enforced in v1; queued entries persist until drained. A v2 cap (e.g., drop after 5 retries) is deferred until dogfood reveals demand.
 - The orchestrator's end-of-run "N items queued" UX surface is not part of Step 9; that lands with the orchestrator session.
+
+## Orchestrator (dry-run, v1)
+
+The orchestrator wires Steps 0-9 into the spec's output contract per build spec lines 228-243. It is dry-run only in v1: produces an `IntakeRun` with the assembled markdown body, the proposed destination, the questions tuple, and the queue surface. The actual file write plus live Step 9 invocation land in `confirm_and_write` in a follow-up commit.
+
+Pipeline ordering (locked 2026-04-30):
+
+1. Auto-drain the NotebookLM retry queue (best-effort; `flush_nlm_queue.still_queued` contributes to `IntakeRun.queued_nlm_count`).
+2. Step 1: detect content type.
+3. Step 2: refine, gated on `config.refinement_enabled` AND `detection.refinement_applicable`.
+4. Step 3: classify, wraps NotImplementedError so emergent-mode runs degrade gracefully.
+5. Step 4: PARA, skipped in emergent mode; wraps NotImplementedError.
+6. Step 5: generate frontmatter, wraps NotImplementedError; needs a non-None `ParaResult` in fixed_domains.
+7. Step 6: generate wikilinks, wraps NotImplementedError; needs classification plus para in fixed_domains.
+8. Step 7: extract next-actions, mode-agnostic and content-driven; runs regardless of upstream skips.
+9. Step 8: route, needs classification plus frontmatter; needs para in fixed_domains.
+10. Step 9: NotebookLM, always called with `note_path=None` in dry-run; returns a `skipped` result. Live invocation moves to `confirm_and_write`.
+
+The orchestrator owns ALL `Frontmatter` mutations via `dataclasses.replace`; library functions never mutate inputs. When Step 9 returns a non-None `source_id` (only possible in non-dry-run), the orchestrator threads it back into `frontmatter.source_id` before final markdown assembly.
+
+Final markdown layout (kickoff item 4):
+
+```
+---
+{frontmatter.to_yaml()}
+---
+
+{refined_or_original_body}
+
+## Possíveis próximos passos      # only when next_actions.gate_fired
+{next_actions.to_markdown()}
+
+## Captura original                # only when refinement.changed
+{refinement.original}
+```
+
+Wikilink proposals are NOT auto-appended; they are surfaced in `IntakeRun.wikilinks` for user confirmation per safety rule 5.
+
+The Python module `vault_intake.orchestrator` exposes `IntakeRun`, `assemble_final_markdown`, `collect_questions`, and `run_intake`:
+
+```python
+from vault_intake.orchestrator import run_intake
+
+result = run_intake(
+    input_text=text,
+    config=config,
+    source_type="paste",      # default
+    source_uri="",            # default
+    captured_at=None,         # default: today's ISO date
+    nlm_command="notebooklm", # injectable for testing
+)
+result.detection              # DetectionResult
+result.refinement             # RefinedContent | None (None when Step 2 skipped)
+result.classification         # ClassificationResult | None (None when Step 3 not implemented)
+result.para                   # ParaResult | None (None in emergent or Step 4 not implemented)
+result.frontmatter            # Frontmatter | None (None when Step 5 not implemented or upstream missing)
+result.wikilinks              # WikilinkResult | None
+result.next_actions           # NextActionsResult (always present; Step 7 mode-agnostic)
+result.route                  # RouteResult | None
+result.notebooklm             # NotebookLMResult | None (always skipped in dry-run)
+result.final_markdown         # assembled body; "" when frontmatter is None
+result.written_path           # always None in dry-run; set by confirm_and_write
+result.queued_nlm_count       # still_queued from auto-drain plus this run's queued count
+result.questions              # tuple[str, ...] of confirmation prompts
+result.summary()              # spec output contract per build spec lines 228-243
+```
 
 ## Safety rules (consolidated, apply across all steps when implemented)
 
