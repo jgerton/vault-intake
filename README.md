@@ -16,11 +16,18 @@ Designed to run as a Claude Code skill. Standalone CLI invocation also supported
 - An Obsidian vault directory with a `CLAUDE.md` containing a `## Vault Config` block
 - Optional: NotebookLM CLI for syncing captured notes to a notebook
 
-## Setup
+## Install
 
-See [`ELIO-SETUP.md`](./ELIO-SETUP.md) for the full setup walkthrough.
+```bash
+git clone https://github.com/jgerton/vault-intake.git
+cd vault-intake
+uv sync
+uv run scripts/install_skill.py
+```
 
-For technical details on how the skill works, see [`SKILL.md`](./SKILL.md).
+You'll need a vault directory with a `CLAUDE.md` containing a `## Vault Config` block. See [`SKILL.md`](./SKILL.md) for the full reference, required fields, and CLI flags.
+
+Currently in design-partner pilot phase. For setup help during alpha, contact jgerton@gmail.com.
 
 ## Status
 
