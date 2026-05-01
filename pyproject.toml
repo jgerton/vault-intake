@@ -3,6 +3,10 @@ name = "vault-intake"
 version = "0.1.0"
 description = "Memory Branch M1: trusted capture skill for Second-Brain vaults"
 requires-python = ">=3.12"
+license = "AGPL-3.0-only"
+authors = [
+    { name = "Jon Gerton", email = "jgerton@gmail.com" },
+]
 dependencies = [
     "pyyaml>=6.0.2",
 ]
