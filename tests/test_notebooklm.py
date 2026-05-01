@@ -1210,6 +1210,7 @@ def test_flush_processes_drain_even_when_note_has_no_frontmatter(tmp_path):
     note = tmp_path / "no-fm.md"
     raw = "# Just a body, no frontmatter at all\n"
     note.write_text(raw, encoding="utf-8")
+    original_bytes = note.read_bytes()
     _seed_queue(tmp_path, note_path=note)
 
     fake = _route_subprocess(
@@ -1220,7 +1221,7 @@ def test_flush_processes_drain_even_when_note_has_no_frontmatter(tmp_path):
 
     assert result.processed == 1
     assert result.still_queued == 0
-    assert note.read_text(encoding="utf-8") == raw
+    assert note.read_bytes() == original_bytes
     queue_dir = tmp_path / ".vault-intake" / "nlm_queue"
     assert not list(queue_dir.glob("*.json"))
 
@@ -1237,6 +1238,7 @@ def test_flush_processes_drain_when_frontmatter_lacks_source_id_field(tmp_path):
     note = tmp_path / "no-source-id.md"
     raw = "---\ntitle: stripped\ndate: 2026-04-30\n---\nBody.\n"
     note.write_text(raw, encoding="utf-8")
+    original_bytes = note.read_bytes()
     _seed_queue(tmp_path, note_path=note)
 
     fake = _route_subprocess(
@@ -1247,7 +1249,7 @@ def test_flush_processes_drain_when_frontmatter_lacks_source_id_field(tmp_path):
 
     assert result.processed == 1
     assert result.still_queued == 0
-    assert note.read_text(encoding="utf-8") == raw
+    assert note.read_bytes() == original_bytes
     queue_dir = tmp_path / ".vault-intake" / "nlm_queue"
     assert not list(queue_dir.glob("*.json"))
 
