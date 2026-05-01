@@ -1117,6 +1117,126 @@ def test_flush_subprocess_run_uses_explicit_utf8_encoding(tmp_path):
         )
 
 
+def _seed_note_with_frontmatter(
+    note_path: Path,
+    *,
+    body: str = "# Real Note\n\nMain body of the note.\n",
+    source_id: str = "",
+    title: str = "real-note",
+    domain: str = "ops",
+) -> str:
+    """Write a note with a real frontmatter block to disk; return on-disk content."""
+    fm = dataclasses.replace(
+        _make_frontmatter(title=title, domain=domain),
+        source_id=source_id,
+    )
+    content = f"---\n{fm.to_yaml()}---\n{body}"
+    note_path.write_text(content, encoding="utf-8")
+    return content
+
+
+def test_flush_threads_source_id_into_note_frontmatter(tmp_path):
+    """After successful drain, the note's frontmatter source_id field is updated.
+
+    Documented gap from the install milestone: confirm_and_write threads the
+    new source_id back via dataclasses.replace + atomic re-write, but
+    flush_nlm_queue's drain did not, leaving the on-disk note's source_id
+    field empty even though NotebookLM had the source. This test pins the
+    threading contract for queue drains.
+    """
+    config = _make_config(vault_path=tmp_path)
+    note = tmp_path / "real-note.md"
+    _seed_note_with_frontmatter(note, source_id="")
+    _seed_queue(tmp_path, note_path=note)
+
+    fake = _route_subprocess(
+        source_add=_completed(stdout=json.dumps({"id": "src-from-drain-xyz"})),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = flush_nlm_queue(config)
+
+    assert result.processed == 1
+    updated = note.read_text(encoding="utf-8")
+    assert "source_id: src-from-drain-xyz" in updated, (
+        f"source_id not threaded back into note frontmatter; got:\n{updated[:500]}"
+    )
+    assert "source_id: ''" not in updated, (
+        f"empty source_id line still present after drain; got:\n{updated[:500]}"
+    )
+
+
+def test_flush_preserves_note_body_byte_for_byte_outside_source_id(tmp_path):
+    """Threading source_id must not perturb anything else in the note file."""
+    config = _make_config(vault_path=tmp_path)
+    note = tmp_path / "preserve-test.md"
+    body = (
+        "# Heading with Unicode: Reunião\n"
+        "\n"
+        "Paragraph one with **bold** and _italic_.\n"
+        "\n"
+        "- bullet a\n"
+        "- bullet b\n"
+        "\n"
+        "Paragraph two ends with a period.\n"
+    )
+    original = _seed_note_with_frontmatter(
+        note, body=body, source_id="", title="preserve-test"
+    )
+    _seed_queue(tmp_path, note_path=note)
+
+    fake = _route_subprocess(
+        source_add=_completed(stdout=json.dumps({"id": "src-preserve-1"})),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        flush_nlm_queue(config)
+
+    updated = note.read_text(encoding="utf-8")
+    # The only diff between original and updated should be the source_id line.
+    expected = original.replace("source_id: ''", "source_id: src-preserve-1")
+    assert updated == expected, (
+        "note content diverged outside the source_id line\n"
+        f"--- expected ---\n{expected!r}\n--- got ---\n{updated!r}"
+    )
+
+
+def test_flush_threading_refuses_to_write_outside_vault(tmp_path):
+    """Defense-in-depth: queue entry pointing outside vault must not get rewritten.
+
+    Mirrors confirm_and_write's _check_destination_inside_vault. If a queue
+    payload somehow references a path outside vault_path (e.g., crafted file,
+    symlink trickery), threading silently skips the rewrite. The drain itself
+    still succeeds because the source IS in NotebookLM; only the local-file
+    side effect is suppressed.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outside = tmp_path / "outside.md"
+    original = _seed_note_with_frontmatter(outside, source_id="", title="outside")
+
+    config = _make_config(vault_path=vault)
+    queue_dir = vault / ".vault-intake" / "nlm_queue"
+    queue_dir.mkdir(parents=True)
+    payload = {
+        "schema_version": 1,
+        "queued_at": "2026-04-30T00:00:00Z",
+        "note_path": str(outside),
+        "notebook_id": "nb-ops-id",
+        "classification_primary": "ops",
+        "retry_count": 0,
+    }
+    queue_file = queue_dir / "outside.json"
+    queue_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    fake = _route_subprocess(
+        source_add=_completed(stdout=json.dumps({"id": "src-outside"})),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        flush_nlm_queue(config)
+
+    # Note file outside the vault must remain byte-for-byte unchanged.
+    assert outside.read_text(encoding="utf-8") == original
+
+
 def test_flush_partial_when_some_adds_fail(tmp_path):
     config = _make_config(vault_path=tmp_path)
     note_a = _make_note(tmp_path, name="a.md")

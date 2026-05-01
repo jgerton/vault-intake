@@ -62,6 +62,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 from .classify import ClassificationResult
 from .config import Config
 from .frontmatter import Frontmatter
@@ -333,7 +335,7 @@ def flush_nlm_queue(
         except Exception:  # noqa: BLE001 - count is advisory during drain
             pass
         try:
-            _source_add(notebook_id, note_path, nlm_command)
+            source_id = _source_add(notebook_id, note_path, nlm_command)
         except Exception:  # noqa: BLE001 - any add failure leaves the entry queued
             payload["retry_count"] = _safe_int(payload.get("retry_count")) + 1
             # If the rewrite fails (disk full, permissions, etc.) the
@@ -343,6 +345,7 @@ def flush_nlm_queue(
             _write_queue_payload(queue_file, payload)
             still_queued += 1
             continue
+        _thread_source_id_into_note(note_path, source_id, config.vault_path)
         _safe_unlink(queue_file)
         processed += 1
 
@@ -570,6 +573,70 @@ def _safe_unlink(path: Path) -> None:
         path.unlink()
     except OSError:
         pass
+
+
+_FRONTMATTER_BLOCK_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+_SOURCE_ID_LINE_PATTERN = re.compile(r"^source_id:.*$", re.MULTILINE)
+
+
+def _thread_source_id_into_note(
+    note_path: Path,
+    source_id: str,
+    vault_path: Path,
+) -> None:
+    """Atomically rewrite the note so frontmatter source_id matches `source_id`.
+
+    Mirrors confirm_and_write's threading. Surgical line replacement keeps
+    everything outside source_id byte-for-byte. Refuses to write if
+    note_path resolves outside vault_path. Silent on parse/IO error: the
+    note is left untouched but the queue drain still counts as processed
+    because the source IS in NotebookLM.
+    """
+    try:
+        if not note_path.resolve().is_relative_to(vault_path.resolve()):
+            return
+    except OSError:
+        return
+
+    try:
+        content = note_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    block_match = _FRONTMATTER_BLOCK_PATTERN.match(content)
+    if block_match is None:
+        return
+
+    yaml_block = block_match.group(1)
+    new_line = yaml.safe_dump(
+        {"source_id": source_id},
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=False,
+    ).rstrip("\n")
+    new_yaml_block, replaced = _SOURCE_ID_LINE_PATTERN.subn(
+        new_line, yaml_block, count=1
+    )
+    if replaced == 0:
+        return
+
+    new_content = (
+        f"---\n{new_yaml_block}\n---\n"
+        + content[block_match.end():]
+    )
+    if new_content == content:
+        return
+
+    tmp = note_path.with_suffix(note_path.suffix + ".tmp")
+    try:
+        tmp.write_text(new_content, encoding="utf-8")
+        os.replace(tmp, note_path)
+    except OSError:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def _safe_int(value: object, default: int = 0) -> int:
