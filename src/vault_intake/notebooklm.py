@@ -369,11 +369,15 @@ class _CLIError(Exception):
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    # Without explicit encoding, the parent reader thread falls back to
+    # locale.getpreferredencoding(False), which is cp1252 on Windows.
     return subprocess.run(
         cmd,
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=_SUBPROCESS_TIMEOUT,
         env=env,
     )

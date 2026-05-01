@@ -352,6 +352,45 @@ def test_auth_precheck_uses_PYTHONIOENCODING_utf8(tmp_path):
         assert env.get("PYTHONIOENCODING") == "utf-8"
 
 
+def test_subprocess_run_uses_explicit_utf8_encoding_with_replace_errors(tmp_path):
+    """Every notebooklm CLI invocation must pass encoding='utf-8' + errors='replace'.
+
+    Regression for UnicodeDecodeError seen during a real-vault drain on
+    Windows on 2026-04-30. The child correctly emits utf-8 (env
+    PYTHONIOENCODING=utf-8), but subprocess.run with text=True and no
+    explicit encoding falls back to locale.getpreferredencoding(False),
+    which is cp1252 on Windows. Bytes outside cp1252 (e.g., 0x90) raise
+    UnicodeDecodeError in the parent's reader thread.
+
+    Setting env['PYTHONIOENCODING'] only affects the child; the parent
+    needs the encoding passed directly to subprocess.run.
+    """
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path)
+
+    fake = _route_subprocess()
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake) as run:
+        integrate_notebooklm(
+            classification=_make_classification(),
+            frontmatter=_make_frontmatter(),
+            config=config,
+            note_path=note,
+        )
+
+    assert run.call_count == 3, "expected auth_check + source_list + source_add"
+    for idx, call in enumerate(run.call_args_list):
+        kwargs = call.kwargs
+        cmd_label = " ".join(call.args[0]) if call.args else "<no args>"
+        assert kwargs.get("encoding") == "utf-8", (
+            f"call {idx} ({cmd_label}): expected encoding='utf-8', got "
+            f"{kwargs.get('encoding')!r}"
+        )
+        assert kwargs.get("errors") == "replace", (
+            f"call {idx} ({cmd_label}): expected errors='replace', got "
+            f"{kwargs.get('errors')!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Round 3: success path with source_id parsing
 # ---------------------------------------------------------------------------
@@ -1047,6 +1086,35 @@ def test_flush_drains_all_when_auth_fresh_and_adds_succeed(tmp_path):
 
     queue_dir = tmp_path / ".vault-intake" / "nlm_queue"
     assert not list(queue_dir.glob("*.json"))
+
+
+def test_flush_subprocess_run_uses_explicit_utf8_encoding(tmp_path):
+    """flush_nlm_queue's drain must also pass encoding='utf-8' + errors='replace'.
+
+    The original UnicodeDecodeError surfaced in flush_nlm_queue on Windows
+    when the parent process's reader thread defaulted to cp1252 while the
+    child emitted utf-8 bytes outside cp1252's range.
+    """
+    config = _make_config(vault_path=tmp_path)
+    note = _make_note(tmp_path)
+    _seed_queue(tmp_path, note_path=note)
+
+    fake = _route_subprocess()
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake) as run:
+        flush_nlm_queue(config)
+
+    assert run.call_count >= 1
+    for idx, call in enumerate(run.call_args_list):
+        kwargs = call.kwargs
+        cmd_label = " ".join(call.args[0]) if call.args else "<no args>"
+        assert kwargs.get("encoding") == "utf-8", (
+            f"flush call {idx} ({cmd_label}): expected encoding='utf-8', got "
+            f"{kwargs.get('encoding')!r}"
+        )
+        assert kwargs.get("errors") == "replace", (
+            f"flush call {idx} ({cmd_label}): expected errors='replace', got "
+            f"{kwargs.get('errors')!r}"
+        )
 
 
 def test_flush_partial_when_some_adds_fail(tmp_path):
