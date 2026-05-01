@@ -260,6 +260,32 @@ def test_title_prefers_short_complete_sentence_over_long_truncated_one(
     assert fm.title == "brief-next"
 
 
+def test_title_falls_back_to_date_when_single_word_overflows_cap(
+    tmp_path: Path,
+) -> None:
+    """A single token longer than the cap has no word boundary; date fallback wins.
+
+    The word-boundary contract forbids mid-word truncation. When no hyphen
+    exists in the first cap chars (one giant unhyphenated token), _slugify
+    returns empty so _build_title yields 'note-{date}' instead of cutting
+    mid-character.
+    """
+    config = _make_config(tmp_path)
+    text = "# " + "a" * 100
+
+    fm = generate_frontmatter(
+        text=text,
+        detection=_make_detection(),
+        refinement=None,
+        classification=_make_classification(),
+        para=_make_para(),
+        config=config,
+        captured_at="2026-04-29",
+    )
+
+    assert fm.title == "note-2026-04-29"
+
+
 def test_title_strips_punctuation_and_normalizes_accents(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
     text = "# Reunião: planejamento, estratégia e execução!"

@@ -271,9 +271,11 @@ def _slugify(source: str) -> str:
     # cap so titles never end mid-word.
     cut = slugged[:_TITLE_MAX_CHARS]
     last_hyphen = cut.rfind("-")
-    if last_hyphen >= 0:
-        cut = cut[:last_hyphen]
-    return cut.strip("-")
+    if last_hyphen < 0:
+        # Single token longer than the cap has no boundary-safe trim;
+        # return empty so _build_title falls back to the date-based default.
+        return ""
+    return cut[:last_hyphen].strip("-")
 
 
 def _build_tags(classification: ClassificationResult) -> tuple[str, ...]:

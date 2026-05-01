@@ -1199,6 +1199,59 @@ def test_flush_preserves_note_body_byte_for_byte_outside_source_id(tmp_path):
     )
 
 
+def test_flush_processes_drain_even_when_note_has_no_frontmatter(tmp_path):
+    """Helper's silent-skip on missing frontmatter must not block drain.
+
+    The source IS in NotebookLM after a successful drain; the on-disk note
+    just doesn't get the threading update. Queue entry is still removed
+    so the user is not stuck retrying forever.
+    """
+    config = _make_config(vault_path=tmp_path)
+    note = tmp_path / "no-fm.md"
+    raw = "# Just a body, no frontmatter at all\n"
+    note.write_text(raw, encoding="utf-8")
+    _seed_queue(tmp_path, note_path=note)
+
+    fake = _route_subprocess(
+        source_add=_completed(stdout=json.dumps({"id": "src-no-fm"})),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = flush_nlm_queue(config)
+
+    assert result.processed == 1
+    assert result.still_queued == 0
+    assert note.read_text(encoding="utf-8") == raw
+    queue_dir = tmp_path / ".vault-intake" / "nlm_queue"
+    assert not list(queue_dir.glob("*.json"))
+
+
+def test_flush_processes_drain_when_frontmatter_lacks_source_id_field(tmp_path):
+    """Missing source_id field is silent-skipped; note unchanged, queue removed.
+
+    Inserting a new field would risk schema-shape violations; the helper
+    leaves the note untouched and lets the source-link gap surface as a
+    manual fixup. The drain still completes because the source IS in
+    NotebookLM.
+    """
+    config = _make_config(vault_path=tmp_path)
+    note = tmp_path / "no-source-id.md"
+    raw = "---\ntitle: stripped\ndate: 2026-04-30\n---\nBody.\n"
+    note.write_text(raw, encoding="utf-8")
+    _seed_queue(tmp_path, note_path=note)
+
+    fake = _route_subprocess(
+        source_add=_completed(stdout=json.dumps({"id": "src-no-field"})),
+    )
+    with patch("vault_intake.notebooklm.subprocess.run", side_effect=fake):
+        result = flush_nlm_queue(config)
+
+    assert result.processed == 1
+    assert result.still_queued == 0
+    assert note.read_text(encoding="utf-8") == raw
+    queue_dir = tmp_path / ".vault-intake" / "nlm_queue"
+    assert not list(queue_dir.glob("*.json"))
+
+
 def test_flush_threading_refuses_to_write_outside_vault(tmp_path):
     """Defense-in-depth: queue entry pointing outside vault must not get rewritten.
 
