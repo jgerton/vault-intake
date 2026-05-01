@@ -55,8 +55,11 @@ NoteType = Literal[
 ]
 
 
-# Maximum kebab-case title length (build spec line 126: "max ~80 chars").
-_TITLE_MAX_CHARS = 80
+# Maximum kebab-case title length. Lowered from 80 to 60 on 2026-04-30
+# after real-vault dogfood produced ugly mid-word-truncated filenames at
+# the 80-char cap; build spec line 126's "max ~80 chars" was a ceiling,
+# not a target.
+_TITLE_MAX_CHARS = 60
 
 # Maximum number of tags per note (build spec line 130: "1-5 specific tags").
 _MAX_TAGS = 5
@@ -71,7 +74,7 @@ _PROCESSED_BY = "/vault-intake"
 _SCHEMA_VERSION = "1.0"
 
 _H1_PATTERN = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
-_SENTENCE_END_PATTERN = re.compile(r"[.!?]+\s")
+_SENTENCE_BOUNDARY_PATTERN = re.compile(r"[.!?]+\s+")
 
 
 # Translation from Step 1's 7-value detection enum to the
@@ -230,13 +233,26 @@ def _extract_title_source(text: str) -> str:
     stripped = text.strip()
     if not stripped:
         return ""
-    sentence_break = _SENTENCE_END_PATTERN.search(stripped)
-    if sentence_break:
-        return stripped[: sentence_break.start()]
-    return stripped
+    sentences = _split_sentences(stripped)
+    if not sentences:
+        return stripped
+    # Prefer the first sentence whose slug fits the cap naturally.
+    # Avoids ugly truncation when the opening sentence runs long but a
+    # later one is short and on-topic.
+    for sentence in sentences:
+        slug = _slug_normalize(sentence)
+        if slug and len(slug) <= _TITLE_MAX_CHARS:
+            return sentence
+    return sentences[0]
 
 
-def _slugify(source: str) -> str:
+def _split_sentences(text: str) -> list[str]:
+    parts = _SENTENCE_BOUNDARY_PATTERN.split(text)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _slug_normalize(source: str) -> str:
+    """Slug pipeline minus the cap. Used to size-test candidates before cutting."""
     if not source:
         return ""
     # NFKD-normalize and strip combining accents so Portuguese inputs
@@ -244,12 +260,20 @@ def _slugify(source: str) -> str:
     normalized = unicodedata.normalize("NFKD", source)
     ascii_only = normalized.encode("ascii", "ignore").decode("ascii")
     lowered = ascii_only.lower()
-    # Replace any run of non-alphanumeric characters with a single
-    # hyphen, then trim leading/trailing hyphens.
-    slugged = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
-    if len(slugged) > _TITLE_MAX_CHARS:
-        slugged = slugged[:_TITLE_MAX_CHARS].rstrip("-")
-    return slugged
+    return re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
+
+
+def _slugify(source: str) -> str:
+    slugged = _slug_normalize(source)
+    if not slugged or len(slugged) <= _TITLE_MAX_CHARS:
+        return slugged
+    # Word-boundary cut: trim back to the last hyphen at or before the
+    # cap so titles never end mid-word.
+    cut = slugged[:_TITLE_MAX_CHARS]
+    last_hyphen = cut.rfind("-")
+    if last_hyphen >= 0:
+        cut = cut[:last_hyphen]
+    return cut.strip("-")
 
 
 def _build_tags(classification: ClassificationResult) -> tuple[str, ...]:

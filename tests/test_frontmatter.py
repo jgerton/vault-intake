@@ -184,7 +184,8 @@ def test_title_fallback_when_input_is_empty(tmp_path: Path) -> None:
     assert fm.title == "note-2026-04-29"
 
 
-def test_title_capped_at_80_chars(tmp_path: Path) -> None:
+def test_title_capped_at_60_chars(tmp_path: Path) -> None:
+    """Title cap is 60 chars (lowered from 80 on 2026-04-30 to fix ugly filenames)."""
     config = _make_config(tmp_path)
     text = "# " + ("word " * 30)
 
@@ -198,8 +199,65 @@ def test_title_capped_at_80_chars(tmp_path: Path) -> None:
         captured_at="2026-04-29",
     )
 
-    assert len(fm.title) <= 80
+    assert len(fm.title) <= 60
     assert not fm.title.endswith("-")
+
+
+def test_title_cuts_at_word_boundary_not_mid_word(tmp_path: Path) -> None:
+    """A long word straddling the cap must be dropped, not truncated mid-word.
+
+    Pre-fix behavior took slugged[:cap].rstrip('-'), which left mid-word
+    truncations like 'antidisestabli' in the title when a long word
+    happened to span the cap boundary. Post-fix cuts back to the last
+    hyphen at or before the cap so titles always end on a clean word.
+    """
+    config = _make_config(tmp_path)
+    text = "# one two three four five six seven eight nine antidisestablishmentarianism"
+
+    fm = generate_frontmatter(
+        text=text,
+        detection=_make_detection(),
+        refinement=None,
+        classification=_make_classification(),
+        para=_make_para(),
+        config=config,
+        captured_at="2026-04-29",
+    )
+
+    assert "antidisestabli" not in fm.title, (
+        f"mid-word truncation in title: {fm.title!r}"
+    )
+    assert fm.title == "one-two-three-four-five-six-seven-eight-nine"
+
+
+def test_title_prefers_short_complete_sentence_over_long_truncated_one(
+    tmp_path: Path,
+) -> None:
+    """When no H1 and first sentence overflows the cap, prefer the next short one.
+
+    Real-world driver: 2026-04-30 first-vault capture produced
+    'today-shipped-the-skill-install-sync-mechanism-for-vault-intake-the-final-piece'
+    because the first sentence ran past the 80-char cap and got
+    truncated. Walking sentences in order and preferring the first one
+    that fits the cap yields cleaner titles.
+    """
+    config = _make_config(tmp_path)
+    text = (
+        "This is a very long opening sentence that exceeds the sixty "
+        "character cap easily and would otherwise be truncated. Brief next."
+    )
+
+    fm = generate_frontmatter(
+        text=text,
+        detection=_make_detection(),
+        refinement=None,
+        classification=_make_classification(),
+        para=_make_para(),
+        config=config,
+        captured_at="2026-04-29",
+    )
+
+    assert fm.title == "brief-next"
 
 
 def test_title_strips_punctuation_and_normalizes_accents(tmp_path: Path) -> None:
