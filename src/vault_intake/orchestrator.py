@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import difflib
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -94,6 +95,7 @@ class QuestionKind(StrEnum):
     PARA = "para.category"
     ROUTE_ARCHIVE = "route.archive"
     FRONTMATTER_TITLE = "frontmatter.title"
+    REFINEMENT_ACCEPT = "refinement.accept"
     NOT_IMPLEMENTED = "not_implemented"
 
 
@@ -214,11 +216,16 @@ class IntakeRun:
         nlm_text = _format_notebooklm(self.notebooklm)
         lines.append(f"NotebookLM: {nlm_text}")
 
-        # Captura original
+        # Refinement status
         if self.refinement is not None and self.refinement.changed:
-            lines.append("Captura original: preserved")
+            orig_lines = self.refinement.original.splitlines()
+            new_lines = self.refinement.refined.splitlines()
+            n_changed = sum(
+                1 for a, b in zip(orig_lines, new_lines) if a != b
+            ) + abs(len(orig_lines) - len(new_lines))
+            lines.append(f"Refinement: {n_changed} line(s) changed (original preserved)")
         else:
-            lines.append("Captura original: not needed")
+            lines.append("Refinement: no changes (original preserved)")
 
         # Queue surface (when nonzero)
         if self.queued_nlm_count > 0:
@@ -292,6 +299,25 @@ def assemble_final_markdown(
     return "\n".join(parts) + "\n"
 
 
+def _format_refinement_diff(original: str, refined: str, *, max_lines: int = 20) -> str:
+    """Return a unified-diff string for the refinement change, capped at max_lines."""
+    diff = list(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        refined.splitlines(keepends=True),
+        fromfile="original",
+        tofile="refined",
+        lineterm="",
+    ))
+    if not diff:
+        return ""
+    lines = diff[:max_lines]
+    result = "\n".join(lines)
+    remaining = len(diff) - max_lines
+    if remaining > 0:
+        result += f"\n... [{remaining} more diff lines]"
+    return result
+
+
 def _extract_content_snippet(body: str, *, max_chars: int = 200) -> str:
     """Return a short excerpt from body for classification context.
 
@@ -327,6 +353,7 @@ def collect_questions(
     frontmatter: Frontmatter | None,
     not_implemented: tuple[str, ...] = (),
     body: str = "",
+    refinement: RefinedContent | None = None,
 ) -> tuple[IntakeQuestion, ...]:
     """Collect uncertainty signals into a tuple of `IntakeQuestion`.
 
@@ -339,6 +366,16 @@ def collect_questions(
     `IntakeRun` field without parsing prompt text.
     """
     questions: list[IntakeQuestion] = []
+    if refinement is not None and refinement.changed:
+        diff_snippet = _format_refinement_diff(refinement.original, refinement.refined)
+        questions.append(
+            IntakeQuestion(
+                kind=QuestionKind.REFINEMENT_ACCEPT,
+                prompt="Step 2 refined your text; accept changes? [Y/n]",
+                suggested="y",
+                content_snippet=diff_snippet or None,
+            )
+        )
     if detection.uncertain:
         questions.append(
             IntakeQuestion(
@@ -577,6 +614,7 @@ def run_intake(
         frontmatter=frontmatter,
         not_implemented=tuple(not_implemented),
         body=body,
+        refinement=refinement,
     )
 
     queued_this_run = (

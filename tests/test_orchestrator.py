@@ -687,6 +687,72 @@ class TestIntakeQuestionShape:
             if q.kind != QuestionKind.CLASSIFICATION:
                 assert q.content_snippet is None, f"{q.kind} should have no snippet"
 
+    def test_refinement_accept_question_added_when_changed(self):
+        """REFINEMENT_ACCEPT question is generated when refinement.changed."""
+        from vault_intake.orchestrator import QuestionKind
+        from vault_intake.refine import RefinedContent
+        changed = RefinedContent(
+            original="ok so like here is the content man.",
+            refined="Here is the content.",
+            changed=True,
+        )
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=False),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            refinement=changed,
+        )
+        kinds = {q.kind for q in questions}
+        assert QuestionKind.REFINEMENT_ACCEPT in kinds
+
+    def test_refinement_accept_question_has_diff_snippet(self):
+        """REFINEMENT_ACCEPT question carries a diff-format content_snippet."""
+        from vault_intake.orchestrator import QuestionKind
+        from vault_intake.refine import RefinedContent
+        changed = RefinedContent(
+            original="ok so like here is the content man.",
+            refined="Here is the content.",
+            changed=True,
+        )
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=False),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            refinement=changed,
+        )
+        by_kind = {q.kind: q for q in questions}
+        q = by_kind[QuestionKind.REFINEMENT_ACCEPT]
+        assert q.content_snippet is not None
+        # Diff markers from unified_diff output.
+        assert "---" in q.content_snippet or "+++" in q.content_snippet
+
+    def test_refinement_accept_not_added_when_unchanged(self):
+        """No REFINEMENT_ACCEPT question when refinement.changed is False."""
+        from vault_intake.orchestrator import QuestionKind
+        from vault_intake.refine import RefinedContent
+        unchanged = RefinedContent(
+            original="content",
+            refined="content",
+            changed=False,
+        )
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=False),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            refinement=unchanged,
+        )
+        kinds = {q.kind for q in questions}
+        assert QuestionKind.REFINEMENT_ACCEPT not in kinds
+
     def test_intake_run_questions_field_holds_intake_questions(self, tmp_path):
         """End-to-end `run_intake` returns an IntakeRun whose
         `questions` tuple is structured."""
@@ -1096,7 +1162,7 @@ class TestIntakeRunSummary:
         assert "Wikilinks:" in summary
         assert "Next steps:" in summary
         assert "NotebookLM:" in summary
-        assert "Captura original:" in summary
+        assert "Refinement:" in summary
 
     def test_summary_emergent_uses_theme_label(self, tmp_path):
         # Even though classify NotImplemented in emergent mode, summary()
@@ -1122,20 +1188,24 @@ class TestIntakeRunSummary:
         assert "2 item(s) queued for NotebookLM" in summary
         assert "notebooklm login" in summary
 
-    def test_summary_captura_preserved_when_changed(self, tmp_path):
+    def test_summary_refinement_changed_shows_refinement_line(self, tmp_path):
+        """When refinement.changed, summary has 'Refinement:' line (not 'Captura original:')."""
         vault = _make_fixed_domains_vault(tmp_path)
         config = _make_config(vault_path=vault, refinement_enabled=True)
         text = _build_transcription()
         result = run_intake(text, config)
         summary = result.summary()
-        assert "Captura original: preserved" in summary
+        assert "Refinement:" in summary
+        assert "Captura original:" not in summary
 
-    def test_summary_captura_not_needed_when_not_refined(self, tmp_path):
+    def test_summary_refinement_no_changes_preserved(self, tmp_path):
+        """When refinement did not change text, summary shows 'Refinement: no changes'."""
         vault = _make_fixed_domains_vault(tmp_path)
         config = _make_config(vault_path=vault)
         result = run_intake("# Doc\n\nShort.", config)
         summary = result.summary()
-        assert "Captura original: not needed" in summary
+        assert "Refinement: no changes" in summary
+        assert "Captura original:" not in summary
 
     def test_summary_includes_route_rationale(self, tmp_path):
         """Route: line appears in summary when routing succeeded."""
