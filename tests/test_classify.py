@@ -135,12 +135,6 @@ def test_empty_input_returns_uncertain_zero_confidence():
     assert result.primary in ("ops", "branding")
 
 
-def test_emergent_mode_raises_not_implemented():
-    config = _make_config(mode="emergent", domains=())
-
-    with pytest.raises(NotImplementedError, match=r"emergent"):
-        classify("any content", config)
-
 
 def test_tokenizer_preserves_unicode_letters():
     tokens = _tokenize("Saúde, alimentação, exercício.")
@@ -173,3 +167,135 @@ def test_threshold_read_from_config_changes_uncertain():
     assert lenient_result.confidence == strict_result.confidence
     assert lenient_result.uncertain is False
     assert strict_result.uncertain is True
+
+
+# ---------------------------------------------------------------------------
+# Item 2 (M2): emergent mode classification
+# ---------------------------------------------------------------------------
+
+
+def _make_emergent_config(vault_path: Path, *, threshold: float = 0.6) -> Config:
+    return Config(
+        vault_path=vault_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="pt-BR",
+        skip_notebooklm=False,
+        refinement_enabled=True,
+        classification_confidence_threshold=threshold,
+    )
+
+
+def test_emergent_classify_no_longer_raises(tmp_path: Path) -> None:
+    """emergent classify now returns a result instead of raising NotImplementedError."""
+    config = _make_emergent_config(tmp_path)
+    result = classify("Braindump sobre posicionamento.", config)
+    assert isinstance(result, ClassificationResult)
+    assert result.mode == "emergent"
+
+
+def test_emergent_classify_mode_field_is_emergent(tmp_path: Path) -> None:
+    config = _make_emergent_config(tmp_path)
+    result = classify("Some content.", config)
+    assert result.mode == "emergent"
+
+
+def test_emergent_classify_empty_vault_returns_uncertain_proposed_theme(
+    tmp_path: Path,
+) -> None:
+    """Empty vault: no candidates, proposes theme from most-frequent input token."""
+    config = _make_emergent_config(tmp_path)
+    result = classify(
+        "posicionamento posicionamento marca estrategia.", config
+    )
+    assert result.uncertain is True
+    assert result.confidence == 0.0
+    assert result.primary == "posicionamento"
+
+
+def test_emergent_classify_matches_existing_theme_folder(tmp_path: Path) -> None:
+    """A top-level vault folder whose name matches input content becomes the theme."""
+    (tmp_path / "posicionamento").mkdir()
+    (tmp_path / "marca").mkdir()
+    config = _make_emergent_config(tmp_path)
+    # Only mentions posicionamento so it unambiguously wins over marca
+    result = classify(
+        "Quero falar sobre posicionamento no mercado digital.", config
+    )
+    assert result.primary == "posicionamento"
+    assert result.uncertain is False
+
+
+def test_emergent_classify_matches_frontmatter_theme(tmp_path: Path) -> None:
+    """A theme name from existing note frontmatter is a valid candidate."""
+    note = tmp_path / "nota.md"
+    note.write_text("---\ntheme: posicionamento\n---\nConteudo.", encoding="utf-8")
+    config = _make_emergent_config(tmp_path)
+    result = classify(
+        "Quero falar sobre posicionamento de marca no mercado.", config
+    )
+    assert result.primary == "posicionamento"
+
+
+def test_emergent_classify_secondary_themes_included(tmp_path: Path) -> None:
+    """Themes scoring >= 40% of primary are included as secondary."""
+    (tmp_path / "posicionamento").mkdir()
+    (tmp_path / "marca").mkdir()
+    config = _make_emergent_config(tmp_path)
+    result = classify(
+        "posicionamento posicionamento marca marca marca estrategia.", config
+    )
+    assert result.primary in ("posicionamento", "marca")
+    assert len(result.secondary) >= 1
+
+
+def test_emergent_classify_system_folders_excluded(tmp_path: Path) -> None:
+    """Underscore-prefixed and dot-prefixed folders are not treated as themes."""
+    (tmp_path / "_inbox").mkdir()
+    (tmp_path / "_sinteses").mkdir()
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "posicionamento").mkdir()
+    config = _make_emergent_config(tmp_path)
+    result = classify("Conteudo sobre posicionamento de marca.", config)
+    assert "_inbox" not in (result.primary,) + result.secondary
+    assert "_sinteses" not in (result.primary,) + result.secondary
+    assert ".git" not in (result.primary,) + result.secondary
+    assert result.primary == "posicionamento"
+
+
+def test_emergent_classify_uncertain_when_confidence_below_threshold(
+    tmp_path: Path,
+) -> None:
+    """Low-scoring match (one weak hit) sets uncertain=True with strict threshold."""
+    (tmp_path / "posicionamento").mkdir()
+    config = _make_emergent_config(tmp_path, threshold=0.9)
+    # One mention of the theme slug produces confidence 3/5 = 0.6, below 0.9
+    result = classify("posicionamento estrategia.", config)
+    assert result.uncertain is True
+
+
+def test_emergent_classify_proposed_theme_is_most_frequent_token(
+    tmp_path: Path,
+) -> None:
+    """When no themes exist, proposed theme is the most frequent significant token."""
+    config = _make_emergent_config(tmp_path)
+    result = classify(
+        "marca marca marca posicionamento estrategia.", config
+    )
+    assert result.primary == "marca"
+    assert result.uncertain is True
+
+
+def test_emergent_classify_deduplicates_folder_and_frontmatter_sources(
+    tmp_path: Path,
+) -> None:
+    """Same theme from both a folder name and a frontmatter value is not double-counted."""
+    (tmp_path / "posicionamento").mkdir()
+    note = tmp_path / "nota.md"
+    note.write_text("---\ntheme: posicionamento\n---\nCorpo.", encoding="utf-8")
+    config = _make_emergent_config(tmp_path)
+    result = classify("posicionamento de marca", config)
+    assert result.primary == "posicionamento"
+    # Should not appear twice in secondary
+    assert result.secondary.count("posicionamento") == 0

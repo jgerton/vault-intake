@@ -1,14 +1,20 @@
 """Step 3: classify content into a domain or theme.
 
 fixed_domains mode (v1): rule-based keyword matching against each domain's
-slug and description. Emergent mode raises NotImplementedError until the
-emergent track ships.
+slug and description. Emergent mode (v1): reads theme candidates from vault
+top-level folders and markdown frontmatter, then scores input by word
+frequency (duplicates counted) so single-word themes break ties correctly.
 """
 from __future__ import annotations
 
+import os
 import re
+from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
+
+import yaml
 
 from .config import Config, ConfigError
 
@@ -60,10 +66,7 @@ def _tokenize(text: str) -> set[str]:
 
 def classify(text: str, config: Config) -> ClassificationResult:
     if config.mode == "emergent":
-        raise NotImplementedError(
-            "emergent mode classify is not implemented in v1; "
-            "use classification_mode: fixed_domains for now"
-        )
+        return _classify_emergent(text, config)
 
     if not config.domains:
         raise ConfigError(
@@ -106,4 +109,130 @@ def classify(text: str, config: Config) -> ClassificationResult:
         confidence=confidence,
         uncertain=confidence < threshold,
         mode="fixed_domains",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Emergent mode helpers
+# ---------------------------------------------------------------------------
+
+_SKIP_SYSTEM_PREFIXES = ("_", ".")
+
+_FM_FENCE_RE = re.compile(r"\n---\s*(?:\n|$)")
+
+
+def _parse_frontmatter_yaml(text: str) -> dict[str, object]:
+    if not text.startswith("---"):
+        return {}
+    after_open = text[3:].lstrip("\r\n")
+    close_match = _FM_FENCE_RE.search("\n" + after_open)
+    if close_match is None:
+        return {}
+    yaml_text = ("\n" + after_open)[: close_match.start()]
+    try:
+        parsed = yaml.safe_load(yaml_text)
+    except yaml.YAMLError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _collect_emergent_themes(vault_path: Path) -> set[str]:
+    """Return theme candidates from top-level vault folders and note frontmatter."""
+    themes: set[str] = set()
+
+    # Top-level directories (excluding system folders)
+    try:
+        for entry in vault_path.iterdir():
+            if entry.is_dir() and not entry.name.startswith(_SKIP_SYSTEM_PREFIXES):
+                themes.add(entry.name)
+    except OSError:
+        pass
+
+    # Markdown file frontmatter theme values
+    for root, dirs, files in os.walk(vault_path):
+        dirs[:] = sorted(
+            d for d in dirs if not d.startswith(_SKIP_SYSTEM_PREFIXES)
+        )
+        for fname in sorted(files):
+            if not fname.endswith(".md"):
+                continue
+            path = Path(root) / fname
+            try:
+                text = path.read_text(encoding="utf-8-sig")
+            except (OSError, UnicodeDecodeError):
+                continue
+            fm = _parse_frontmatter_yaml(text)
+            theme_val = fm.get("theme")
+            if isinstance(theme_val, str) and theme_val.strip():
+                themes.add(theme_val.strip())
+
+    return themes
+
+
+def _propose_theme_from_text(text: str) -> str:
+    """Return most frequent significant token from text as a proposed theme name."""
+    words = [w for w in _WORD_RE.findall(text.lower()) if w not in _STOPWORDS]
+    if not words:
+        return ""
+    return Counter(words).most_common(1)[0][0]
+
+
+def _classify_emergent(text: str, config: Config) -> ClassificationResult:
+    themes = _collect_emergent_themes(config.vault_path)
+
+    if not themes:
+        proposed = _propose_theme_from_text(text)
+        return ClassificationResult(
+            primary=proposed,
+            secondary=(),
+            confidence=0.0,
+            uncertain=True,
+            mode="emergent",
+        )
+
+    # Frequency-based scoring: count raw word occurrences (not deduped set)
+    # so that a theme slug appearing multiple times in the input scores higher.
+    # Single-word emergent themes have no description vocabulary to widen
+    # the overlap window, so frequency breaks ties that set-intersection leaves
+    # ambiguous.
+    word_counts: Counter[str] = Counter(
+        w for w in _WORD_RE.findall(text.lower()) if w not in _STOPWORDS
+    )
+
+    scored: list[tuple[str, int]] = []
+    for theme in sorted(themes):
+        vocab = _tokenize(theme)
+        base_hits = sum(word_counts.get(t, 0) for t in vocab)
+        bonus = _SLUG_BONUS if word_counts.get(theme.lower(), 0) > 0 else 0
+        scored.append((theme, base_hits + bonus))
+
+    scored.sort(key=lambda item: (-item[1], item[0]))
+
+    primary_theme, primary_score = scored[0]
+    runner_up_score = scored[1][1] if len(scored) > 1 else 0
+
+    secondary = tuple(
+        t for t, score in scored[1:]
+        if score >= 1 and score >= primary_score * _SECONDARY_RATIO
+    )
+
+    if primary_score == 0:
+        proposed = _propose_theme_from_text(text)
+        return ClassificationResult(
+            primary=proposed or primary_theme,
+            secondary=(),
+            confidence=0.0,
+            uncertain=True,
+            mode="emergent",
+        )
+
+    denom = max(_MIN_EVIDENCE, primary_score + runner_up_score)
+    confidence = primary_score / denom
+    threshold = config.classification_confidence_threshold
+    return ClassificationResult(
+        primary=primary_theme,
+        secondary=secondary,
+        confidence=confidence,
+        uncertain=confidence < threshold,
+        mode="emergent",
     )
