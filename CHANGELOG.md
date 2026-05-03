@@ -2,6 +2,15 @@
 
 All notable changes to vault-intake are documented here.
 
+## [0.2.1] - 2026-05-03
+
+Documentation patch: clarifies vault management surface ahead of M3 scoping.
+
+### Added
+
+- README sections covering: where files live (path table), running multiple vaults, the multi-account NotebookLM constraint (single-account-at-a-time per upstream CLI), and how to move a vault.
+- README header bumped to reflect M2 (v0.2.0) rather than M1.
+
 ## [0.2.0] - 2026-05-02
 
 M2 emergent-mode sprint: ships the second classification mode end-to-end, plus the `--inbox` batch flag for Wispr-Flow-style watch-folder workflows.
