@@ -98,6 +98,7 @@ class _VaultNote:
     path: Path
     label: str            # frontmatter title when set, else filename stem
     domain: str | None    # frontmatter `domain` value, when present
+    theme: str | None     # frontmatter `theme` value, when present (emergent mode)
     title_tokens: frozenset[str]
     mtime: float
 
@@ -120,12 +121,6 @@ def generate_wikilinks(
     max_proposals: int = _DEFAULT_MAX_PROPOSALS,
     min_proposals_target: int = _DEFAULT_MIN_PROPOSALS,
 ) -> WikilinkResult:
-    if config.mode == "emergent":
-        raise NotImplementedError(
-            "emergent mode wikilinks are not implemented in v1; "
-            "use classification_mode: fixed_domains for now"
-        )
-
     # `min_proposals_target` is intentionally not enforced as a floor.
     # The contract per spec line 169 is "top 3-7"; when fewer candidates
     # exist we return what we have rather than padding with weak fillers.
@@ -135,53 +130,79 @@ def generate_wikilinks(
 
     vault_notes = tuple(_walk_vault(config.vault_path))
     body_tokens = _tokenize(text)
-    secondary_set = set(classification.secondary)
     existing_labels = _collect_existing_labels(vault_notes)
 
     candidates: dict[str, _Candidate] = {}
 
-    for note in vault_notes:
-        if note.domain is not None and note.domain in secondary_set:
-            cross = _Candidate(
-                target=note.label,
-                weight=4,
-                source_path=note.path,
-                reason=f"cross-domain ({classification.primary}, {note.domain})",
-                mtime=note.mtime,
-            )
-            _upsert(candidates, cross)
-
-        if note.title_tokens:
-            overlap = note.title_tokens & body_tokens
-            if len(overlap) >= _CONCEPT_OVERLAP_FLOOR:
-                shared = ", ".join(sorted(overlap)[:3])
-                concept = _Candidate(
+    if config.mode == "emergent":
+        primary_theme = classification.primary
+        for note in vault_notes:
+            if note.theme is not None and note.theme == primary_theme:
+                same_theme = _Candidate(
                     target=note.label,
-                    weight=2,
+                    weight=4,
                     source_path=note.path,
-                    reason=f"concept overlap on {shared}",
+                    reason=f"same theme: {primary_theme}",
                     mtime=note.mtime,
                 )
-                _upsert(candidates, concept)
+                _upsert(candidates, same_theme)
 
-    if para.category == "project" and para.project_slug:
-        slug = para.project_slug
-        source = _resolve_project_source(config.vault_path, slug)
-        if source is None:
-            mtime = 0.0
-        else:
-            try:
-                mtime = source.stat().st_mtime
-            except OSError:
+            if note.title_tokens:
+                overlap = note.title_tokens & body_tokens
+                if len(overlap) >= _CONCEPT_OVERLAP_FLOOR:
+                    shared = ", ".join(sorted(overlap)[:3])
+                    concept = _Candidate(
+                        target=note.label,
+                        weight=2,
+                        source_path=note.path,
+                        reason=f"concept overlap on {shared}",
+                        mtime=note.mtime,
+                    )
+                    _upsert(candidates, concept)
+    else:
+        secondary_set = set(classification.secondary)
+        for note in vault_notes:
+            if note.domain is not None and note.domain in secondary_set:
+                cross = _Candidate(
+                    target=note.label,
+                    weight=4,
+                    source_path=note.path,
+                    reason=f"cross-domain ({classification.primary}, {note.domain})",
+                    mtime=note.mtime,
+                )
+                _upsert(candidates, cross)
+
+            if note.title_tokens:
+                overlap = note.title_tokens & body_tokens
+                if len(overlap) >= _CONCEPT_OVERLAP_FLOOR:
+                    shared = ", ".join(sorted(overlap)[:3])
+                    concept = _Candidate(
+                        target=note.label,
+                        weight=2,
+                        source_path=note.path,
+                        reason=f"concept overlap on {shared}",
+                        mtime=note.mtime,
+                    )
+                    _upsert(candidates, concept)
+
+        if para is not None and para.category == "project" and para.project_slug:
+            slug = para.project_slug
+            source = _resolve_project_source(config.vault_path, slug)
+            if source is None:
                 mtime = 0.0
-        project = _Candidate(
-            target=slug,
-            weight=3,
-            source_path=source,
-            reason=f"active project: {slug}",
-            mtime=mtime,
-        )
-        _upsert(candidates, project)
+            else:
+                try:
+                    mtime = source.stat().st_mtime
+                except OSError:
+                    mtime = 0.0
+            project = _Candidate(
+                target=slug,
+                weight=3,
+                source_path=source,
+                reason=f"active project: {slug}",
+                mtime=mtime,
+            )
+            _upsert(candidates, project)
 
     seen_typed: set[str] = set()
     for raw_target in _scan_typed_wikilinks(text):
@@ -220,9 +241,10 @@ def generate_wikilinks(
         for c in sorted_candidates[:max_proposals]
     )
 
+    mode: Mode = "emergent" if config.mode == "emergent" else "fixed_domains"
     return WikilinkResult(
         proposals=proposals,
-        mode="fixed_domains",
+        mode=mode,
         candidates_considered=candidates_considered,
     )
 
@@ -292,6 +314,8 @@ def _read_note(path: Path) -> _VaultNote | None:
     label = title or path.stem
     domain_value = fm.get("domain")
     domain = domain_value.strip() if isinstance(domain_value, str) and domain_value.strip() else None
+    theme_value = fm.get("theme")
+    theme = theme_value.strip() if isinstance(theme_value, str) and theme_value.strip() else None
     title_tokens = frozenset(_tokenize(label))
     try:
         mtime = path.stat().st_mtime
@@ -301,6 +325,7 @@ def _read_note(path: Path) -> _VaultNote | None:
         path=path,
         label=label,
         domain=domain,
+        theme=theme,
         title_tokens=title_tokens,
         mtime=mtime,
     )

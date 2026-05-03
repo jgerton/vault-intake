@@ -1,7 +1,7 @@
-"""Tests for Step 6: generate wikilinks (fixed_domains track).
+"""Tests for Step 6: generate wikilinks (fixed_domains and emergent tracks).
 
-Covers the fixed_domains shape end-to-end. Emergent mode raises
-NotImplementedError in v1; emergent track lands in a separate session.
+Covers fixed_domains end-to-end plus emergent mode signal set
+(same-theme weight 4, concept overlap weight 2, backlog markers weight 1).
 """
 from __future__ import annotations
 
@@ -452,15 +452,6 @@ def test_alphabetical_when_recency_ties(tmp_path: Path) -> None:
     assert targets == ["Alpha branding", "Beta branding"]
 
 
-def test_emergent_mode_raises_not_implemented(tmp_path: Path) -> None:
-    config = _make_config(tmp_path, mode="emergent", domains=())
-    with pytest.raises(NotImplementedError, match=r"emergent"):
-        generate_wikilinks(
-            text="any",
-            classification=_make_classification(mode="fixed_domains"),
-            para=_make_para(),
-            config=config,
-        )
 
 
 def test_uncertain_classification_returns_result_without_crashing(
@@ -796,3 +787,219 @@ def test_malformed_frontmatter_falls_back_to_filename_stem(tmp_path: Path) -> No
     assert "process-overlap-stem" in targets
     overlap = next(w for w in result.proposals if w.target == "process-overlap-stem")
     assert overlap.weight == 2
+
+
+# ---------------------------------------------------------------------------
+# Item 3 (M2): emergent mode wikilinks
+# ---------------------------------------------------------------------------
+
+
+def _make_emergent_config(vault_path: Path) -> Config:
+    return Config(
+        vault_path=vault_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="pt-BR",
+        skip_notebooklm=False,
+        refinement_enabled=True,
+        classification_confidence_threshold=0.6,
+    )
+
+
+def _make_emergent_classification(
+    *,
+    primary: str = "posicionamento",
+    secondary: tuple[str, ...] = (),
+    confidence: float = 0.8,
+    uncertain: bool = False,
+) -> ClassificationResult:
+    return ClassificationResult(
+        primary=primary,
+        secondary=secondary,
+        confidence=confidence,
+        uncertain=uncertain,
+        mode="emergent",
+    )
+
+
+def _write_emergent_note(
+    path: Path,
+    *,
+    title: str | None = None,
+    theme: str | None = None,
+    body: str = "",
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    parts: list[str] = []
+    if title is not None or theme is not None:
+        parts.append("---")
+        if title is not None:
+            parts.append(f'title: "{title}"')
+        if theme is not None:
+            parts.append(f"theme: {theme}")
+        parts.append("---")
+    parts.append(body)
+    path.write_text("\n".join(parts), encoding="utf-8")
+    return path
+
+
+def test_emergent_wikilinks_no_longer_raises(tmp_path: Path) -> None:
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="some body",
+        classification=_make_emergent_classification(),
+        para=None,
+        config=config,
+    )
+    assert isinstance(result, WikilinkResult)
+
+
+def test_emergent_wikilinks_mode_field_is_emergent(tmp_path: Path) -> None:
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="some body",
+        classification=_make_emergent_classification(),
+        para=None,
+        config=config,
+    )
+    assert result.mode == "emergent"
+
+
+def test_emergent_wikilinks_same_theme_note_gets_weight_4(tmp_path: Path) -> None:
+    _write_emergent_note(
+        tmp_path / "posicionamento" / "estrategia-de-marca.md",
+        title="Estrategia de marca",
+        theme="posicionamento",
+    )
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="Quero falar sobre posicionamento no mercado.",
+        classification=_make_emergent_classification(primary="posicionamento"),
+        para=None,
+        config=config,
+    )
+    weight4 = [w for w in result.proposals if w.weight == 4]
+    assert len(weight4) >= 1
+    assert weight4[0].target == "Estrategia de marca"
+
+
+def test_emergent_wikilinks_different_theme_note_not_weight_4(tmp_path: Path) -> None:
+    _write_emergent_note(
+        tmp_path / "marca" / "identidade.md",
+        title="Identidade visual",
+        theme="marca",
+    )
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="Quero falar sobre posicionamento no mercado.",
+        classification=_make_emergent_classification(primary="posicionamento"),
+        para=None,
+        config=config,
+    )
+    weight4 = [w for w in result.proposals if w.weight == 4]
+    assert weight4 == []
+
+
+def test_emergent_wikilinks_concept_overlap_weight_2(tmp_path: Path) -> None:
+    _write_emergent_note(
+        tmp_path / "marca" / "identidade.md",
+        title="identidade visual marca",
+        theme="marca",
+    )
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="Reflexao sobre identidade visual e posicionamento.",
+        classification=_make_emergent_classification(primary="posicionamento"),
+        para=None,
+        config=config,
+    )
+    weight2 = [w for w in result.proposals if w.weight == 2]
+    assert len(weight2) >= 1
+    assert weight2[0].target == "identidade visual marca"
+
+
+def test_emergent_wikilinks_backlog_markers_weight_1(tmp_path: Path) -> None:
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="Ver [[Nova Nota]] para mais detalhes.",
+        classification=_make_emergent_classification(),
+        para=None,
+        config=config,
+    )
+    weight1 = [w for w in result.proposals if w.weight == 1]
+    assert len(weight1) >= 1
+    assert weight1[0].target == "Nova Nota"
+
+
+def test_emergent_wikilinks_empty_vault_returns_empty_proposals(
+    tmp_path: Path,
+) -> None:
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="Texto sem wikilinks.",
+        classification=_make_emergent_classification(),
+        para=None,
+        config=config,
+    )
+    assert result.proposals == ()
+
+
+def test_emergent_wikilinks_no_weight_3_project_signal(tmp_path: Path) -> None:
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    (projects_dir / "meu-projeto.md").write_text("# Projeto\n", encoding="utf-8")
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="meu-projeto posicionamento estrategia.",
+        classification=_make_emergent_classification(primary="posicionamento"),
+        para=None,
+        config=config,
+    )
+    weight3 = [w for w in result.proposals if w.weight == 3]
+    assert weight3 == []
+
+
+def test_emergent_wikilinks_same_theme_outranks_concept_overlap(
+    tmp_path: Path,
+) -> None:
+    _write_emergent_note(
+        tmp_path / "posicionamento" / "nota-tema.md",
+        title="nota tema posicionamento",
+        theme="posicionamento",
+    )
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="Reflexao sobre nota tema posicionamento no mercado.",
+        classification=_make_emergent_classification(primary="posicionamento"),
+        para=None,
+        config=config,
+    )
+    note_link = next(
+        (w for w in result.proposals if w.target == "nota tema posicionamento"), None
+    )
+    assert note_link is not None
+    assert note_link.weight == 4
+
+
+def test_emergent_wikilinks_candidates_considered_counts_correctly(
+    tmp_path: Path,
+) -> None:
+    _write_emergent_note(
+        tmp_path / "posicionamento" / "nota-a.md",
+        title="Nota A",
+        theme="posicionamento",
+    )
+    _write_emergent_note(
+        tmp_path / "marca" / "nota-b.md",
+        title="Nota B",
+        theme="marca",
+    )
+    config = _make_emergent_config(tmp_path)
+    result = generate_wikilinks(
+        text="posicionamento estrategia.",
+        classification=_make_emergent_classification(primary="posicionamento"),
+        para=None,
+        config=config,
+    )
+    assert result.candidates_considered >= 1

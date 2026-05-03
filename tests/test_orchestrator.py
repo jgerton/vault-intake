@@ -1052,17 +1052,16 @@ class TestRunIntakeEmergentMode:
         # Step 7 is mode-agnostic; it should still run even when classify failed.
         assert result.next_actions.gate_fired is True
 
-    def test_emergent_mode_wikilinks_cascade_in_questions(self, tmp_path):
-        # Steps 3 (classify) and 5 (frontmatter) now work in emergent mode.
-        # Only Step 6 (wikilinks) still raises NotImplementedError and is
-        # surfaced as a question.
+    def test_emergent_mode_steps_3_5_6_all_complete(self, tmp_path):
+        # Steps 3 (classify), 5 (frontmatter), and 6 (wikilinks) all work in
+        # emergent mode; none should appear as cascade questions.
         vault = _make_emergent_vault(tmp_path)
         config = _make_config(vault_path=vault, mode="emergent", domains=())
         result = run_intake(_OPS_INPUT, config)
         questions_blob = "\n".join(q.prompt for q in result.questions)
         assert "classify" not in questions_blob
         assert "generate_frontmatter" not in questions_blob
-        assert "generate_wikilinks" in questions_blob
+        assert "generate_wikilinks" not in questions_blob
 
 
 class TestRunIntakeFixedDomainsStepNotImplementedCatch:
