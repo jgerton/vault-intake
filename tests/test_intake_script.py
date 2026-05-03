@@ -656,3 +656,45 @@ class TestInboxFlag:
         # New archive entry has a timestamp suffix (more than one .md now).
         archived = list(archive.glob("note*.md"))
         assert len(archived) == 2
+
+    def test_inbox_overwrite_replaces_existing_destination(self, tmp_path):
+        """Codex review C-3 (2026-05-02): --inbox --overwrite must replace
+        existing destination files, not skip them."""
+        vault = _build_vault(tmp_path)
+        # Pre-existing destination collision.
+        sessions = vault / "ops" / "sessions"
+        existing = sessions / "ops-infra-check.md"
+        existing.write_text("OLD CONTENT", encoding="utf-8")
+        _seed_inbox(vault, {"note.md": _OPS_INPUT})
+        result = _run(
+            ["--vault", str(vault), "--inbox", "--yes", "--overwrite"],
+        )
+        assert result.returncode == 0, result.stderr
+        # Destination replaced (not the OLD content).
+        assert "infrastructure deployment process" in existing.read_text(encoding="utf-8")
+        # Source archived.
+        assert (vault / ".vault-intake" / "inbox-processed" / "note.md").exists()
+        # Summary reports written, not skipped.
+        assert "written: 1" in result.stdout
+
+    def test_inbox_confirmation_count_excludes_unread_files(self, tmp_path):
+        """Codex review B-2 (2026-05-02): batch confirmation prompt should
+        count only processable runs, not all .md files including read-failed ones.
+
+        We simulate an unreadable file by making the inbox file a directory
+        named with a .md suffix; Path.iterdir picks it up as `is_file() == False`,
+        which our filter excludes — so we use a different path: a binary file
+        that can't be UTF-8 decoded.
+        """
+        vault = _build_vault(tmp_path)
+        inbox = vault / "inbox"
+        inbox.mkdir()
+        (inbox / "good.md").write_text(_OPS_INPUT, encoding="utf-8")
+        # Invalid UTF-8 sequence so read_text raises UnicodeDecodeError.
+        (inbox / "bad.md").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+        result = _run(
+            ["--vault", str(vault), "--inbox"],
+            stdin="n\n",
+        )
+        # User declined; exit 1. We assert the prompt mentioned 1 processable.
+        assert "Write 1 note" in result.stdout

@@ -958,6 +958,38 @@ def test_braindump_title_falls_back_to_sentence_when_classification_uncertain(
     assert "ops" not in fm.title
 
 
+def test_braindump_gate_includes_context_type(tmp_path: Path) -> None:
+    """Codex review B-4 (2026-05-02): braindump compact title should fire
+    for context-type braindumps too, not only note-type."""
+    config = _make_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Para o cliente X, decidimos seguir uma estrategia mais conservadora.",
+        detection=_make_detection(type="context", refinement_applicable=True),
+        refinement=None,
+        classification=_make_classification(primary="ops", confidence=0.8),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title == "braindump-ops-2026-05-02"
+
+
+def test_braindump_gate_includes_prompt_type(tmp_path: Path) -> None:
+    """Codex review B-4 (2026-05-02): prompt-type braindumps should also
+    receive the compact braindump title."""
+    config = _make_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Use este prompt no notebook de pesquisa para gerar resumos.",
+        detection=_make_detection(type="prompt", refinement_applicable=True),
+        refinement=None,
+        classification=_make_classification(primary="branding", confidence=0.8),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title == "braindump-branding-2026-05-02"
+
+
 # ---------------------------------------------------------------------------
 # Item 1 (M2): emergent mode frontmatter
 # ---------------------------------------------------------------------------

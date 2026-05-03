@@ -204,7 +204,10 @@ def generate_frontmatter(
     captured = captured_at or date.today().isoformat()
     note_date = captured.split("T", 1)[0]
 
-    is_braindump = detection.type == "note" and detection.refinement_applicable
+    is_braindump = (
+        detection.type in ("note", "context", "prompt")
+        and detection.refinement_applicable
+    )
     original_ref = (
         _ORIGINAL_REF_MARKER if refinement is not None and refinement.changed else ""
     )
