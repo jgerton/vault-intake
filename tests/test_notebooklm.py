@@ -113,6 +113,7 @@ def _make_frontmatter(
         date=captured_at,
         type="session",
         domain=domain,
+        theme="",
         tags=(domain,),
         notebook="",
         source_id="",
