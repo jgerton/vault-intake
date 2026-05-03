@@ -88,7 +88,7 @@ def route(
         raise ValueError(
             "fixed_domains route requires a ParaResult; got None"
         )
-    return _route_fixed_domains(detection, para, frontmatter, config)
+    return _route_fixed_domains(detection, para, frontmatter, config, domain=classification.primary)
 
 
 def _route_fixed_domains(
@@ -96,10 +96,12 @@ def _route_fixed_domains(
     para: ParaResult,
     frontmatter: Frontmatter,
     config: Config,
+    *,
+    domain: str,
 ) -> RouteResult:
     archive_flagged = para.category == "archive"
     destination, link_target, is_section_update, reason = _resolve_fixed_domains_destination(
-        detection, para, frontmatter, config.vault_path
+        detection, para, frontmatter, config.vault_path, domain=domain
     )
     inbox_fallback = destination == config.vault_path / _INBOX_NAME
 
@@ -122,6 +124,8 @@ def _resolve_fixed_domains_destination(
     para: ParaResult,
     frontmatter: Frontmatter,
     vault_path: Path,
+    *,
+    domain: str,
 ) -> tuple[Path, Path | None, bool, str]:
     f_type = frontmatter.type
     d_type = detection.type
@@ -149,6 +153,13 @@ def _resolve_fixed_domains_destination(
     # sets archive_flagged.
     if p_cat == "archive":
         folder = _ARCHIVE_PROXY_FOLDERS.get(effective_type, _INBOX_NAME)
+        if folder == "sessions":
+            return (
+                vault_path / domain / "sessions",
+                None,
+                False,
+                f"type={effective_type}, para=archive, would-be={domain}/sessions/",
+            )
         return (
             vault_path / folder,
             None,
@@ -179,10 +190,10 @@ def _resolve_fixed_domains_destination(
             )
         if effective_type in {"session", "note"}:
             return (
-                vault_path / "sessions",
+                vault_path / domain / "sessions",
                 project_file,
                 False,
-                f"type={effective_type}, para=project, dest=sessions/ + link",
+                f"type={effective_type}, para=project, dest={domain}/sessions/ + link",
             )
         return (
             vault_path / _INBOX_NAME,
@@ -192,9 +203,16 @@ def _resolve_fixed_domains_destination(
         )
 
     # Spec table rows for session/context/reference/note with non-project
-    # PARA categories.
+    # PARA categories. Session-type destinations are domain-scoped.
     table_dest = _SPEC_TABLE.get((effective_type, p_cat))
     if table_dest is not None:
+        if table_dest == "sessions":
+            return (
+                vault_path / domain / "sessions",
+                None,
+                False,
+                f"type={effective_type}, para={p_cat}, dest={domain}/sessions/",
+            )
         return (
             vault_path / table_dest,
             None,

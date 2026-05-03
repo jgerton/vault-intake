@@ -48,7 +48,6 @@ def _build_vault(
     vault = tmp_path / "vault"
     vault.mkdir()
     for folder in (
-        "sessions",
         "insights",
         "workflows",
         "prompts",
@@ -58,6 +57,9 @@ def _build_vault(
         "_inbox",
     ):
         (vault / folder).mkdir()
+    # Domain-scoped session folders (match config domain list below).
+    for domain_slug in ("ops", "branding", "dev"):
+        (vault / domain_slug / "sessions").mkdir(parents=True)
 
     if mode == "fixed_domains":
         config = {
@@ -135,10 +137,10 @@ class TestYesHappyPath:
             stdin=_OPS_INPUT,
         )
         assert result.returncode == 0, result.stderr
-        # Spec table: (note, area) -> sessions/. Title heuristic produces
-        # a slugged title; assert at least one .md file exists under
-        # sessions/ and contains the body verbatim.
-        sessions_dir = vault / "sessions"
+        # Spec table: (note, area) -> <domain>/sessions/. Title heuristic
+        # produces a slugged title; assert at least one .md file exists
+        # under ops/sessions/ and contains the body verbatim.
+        sessions_dir = vault / "ops" / "sessions"
         md_files = list(sessions_dir.glob("*.md"))
         assert len(md_files) == 1
         text = md_files[0].read_text(encoding="utf-8")
@@ -163,7 +165,7 @@ class TestYesHappyPath:
             stdin=_OPS_INPUT,
         )
         assert result.returncode == 0, result.stderr
-        assert (vault / "sessions" / "my-custom-title.md").exists()
+        assert (vault / "ops" / "sessions" / "my-custom-title.md").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +181,7 @@ class TestDryRun:
             stdin=_OPS_INPUT,
         )
         assert result.returncode == 0, result.stderr
-        sessions_dir = vault / "sessions"
+        sessions_dir = vault / "ops" / "sessions"
         assert list(sessions_dir.glob("*.md")) == []
 
     def test_dry_run_prints_summary(self, tmp_path):
@@ -207,7 +209,7 @@ class TestInputAndStdin:
             stdin=None,  # no piped stdin
         )
         assert result.returncode == 0, result.stderr
-        sessions_dir = vault / "sessions"
+        sessions_dir = vault / "ops" / "sessions"
         assert len(list(sessions_dir.glob("*.md"))) == 1
 
     def test_input_path_takes_precedence_over_stdin(self, tmp_path):
@@ -312,20 +314,19 @@ class TestCollision:
         )
         assert first.returncode == 0, first.stderr
 
-        # Overwrite with different content.
+        # Overwrite with different ops-domain content (same domain -> same dest -> collision).
         new_content = (
-            "# Different content\n\n"
-            "Branding work on visual identity for the new launch campaign.\n"
+            "# Ops update\n\n"
+            "Ops infrastructure status update for the deployment pipeline rollout.\n"
         )
         second = _run(
             ["--vault", str(vault), "--yes", "--overwrite", "--title", "duplicate"],
             stdin=new_content,
         )
         assert second.returncode == 0, second.stderr
-        # File now contains the second content.
-        target = vault / "sessions" / "duplicate.md"
+        target = vault / "ops" / "sessions" / "duplicate.md"
         assert target.exists()
-        assert "Branding" in target.read_text(encoding="utf-8")
+        assert "deployment pipeline" in target.read_text(encoding="utf-8")
 
     def test_interactive_collision_overwrite_branch(self, tmp_path):
         """Interactive flow: pre-create the file, then run without
@@ -339,9 +340,10 @@ class TestCollision:
         )
         assert first.returncode == 0, first.stderr
 
+        # Use ops-domain content so both runs route to ops/sessions/ -> collision.
         input_file = tmp_path / "input.md"
         input_file.write_text(
-            "# Different content\n\nBranding work on visual identity launch.\n",
+            "# Ops update\n\nOps deployment pipeline status for the infrastructure rollout.\n",
             encoding="utf-8",
         )
         result = _run(
@@ -354,8 +356,8 @@ class TestCollision:
             stdin="y\no\n",
         )
         assert result.returncode == 0, (result.stdout, result.stderr)
-        target = vault / "sessions" / "duplicate.md"
-        assert "Branding" in target.read_text(encoding="utf-8")
+        target = vault / "ops" / "sessions" / "duplicate.md"
+        assert "deployment pipeline" in target.read_text(encoding="utf-8")
 
     def test_interactive_collision_rename_branch(self, tmp_path):
         """Interactive flow: pre-create the file, then run without
@@ -381,8 +383,8 @@ class TestCollision:
         )
         assert result.returncode == 0, (result.stdout, result.stderr)
         # Original file untouched; renamed file present.
-        assert (vault / "sessions" / "duplicate.md").exists()
-        assert (vault / "sessions" / "duplicate-2.md").exists()
+        assert (vault / "ops" / "sessions" / "duplicate.md").exists()
+        assert (vault / "ops" / "sessions" / "duplicate-2.md").exists()
 
     def test_interactive_collision_abort_branch(self, tmp_path):
         """Interactive flow: pre-create, run interactive, answer `y`
@@ -395,13 +397,14 @@ class TestCollision:
             stdin=_OPS_INPUT,
         )
         assert first.returncode == 0, first.stderr
-        target = vault / "sessions" / "duplicate.md"
+        target = vault / "ops" / "sessions" / "duplicate.md"
         original_text = target.read_text(encoding="utf-8")
 
+        # Use ops-domain content so second run routes to ops/sessions/ -> collision.
         input_file = tmp_path / "input.md"
         input_file.write_text(
-            "# Wholly different content for the abort test.\n\n"
-            "Branding work on visual identity launch.\n",
+            "# Ops abort test\n\n"
+            "Ops infrastructure rollout abort scenario for the deployment process.\n",
             encoding="utf-8",
         )
         result = _run(
@@ -468,7 +471,7 @@ class TestAbort:
         )
         assert result.returncode == 1, (result.stdout, result.stderr)
         # File must not have been written.
-        sessions_dir = vault / "sessions"
+        sessions_dir = vault / "ops" / "sessions"
         assert list(sessions_dir.glob("*.md")) == []
 
 
@@ -498,7 +501,7 @@ class TestStructuredAnswerFlow:
             stdin="y\n",
         )
         assert result.returncode == 0, (result.stdout, result.stderr)
-        assert (vault / "sessions" / "skip-title-prompt.md").exists()
+        assert (vault / "ops" / "sessions" / "skip-title-prompt.md").exists()
 
     def test_yes_flag_accepts_all_suggestions_no_prompts(self, tmp_path):
         """With `--yes`, no prompt is rendered and stdin is not

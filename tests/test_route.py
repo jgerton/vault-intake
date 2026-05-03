@@ -149,7 +149,7 @@ def test_session_project_routes_to_sessions_with_link_target(tmp_path):
         frontmatter=_make_frontmatter(note_type="project", project="launch-redesign"),
         config=config,
     )
-    assert result.destination == tmp_path / "sessions"
+    assert result.destination == tmp_path / "ops" / "sessions"
     assert result.project_link_target == tmp_path / "projects" / "launch-redesign.md"
     assert result.is_section_update is False
     assert result.archive_flagged is False
@@ -165,7 +165,7 @@ def test_session_area_routes_to_sessions_no_link(tmp_path):
         frontmatter=_make_frontmatter(note_type="session"),
         config=config,
     )
-    assert result.destination == tmp_path / "sessions"
+    assert result.destination == tmp_path / "ops" / "sessions"
     assert result.project_link_target is None
 
 
@@ -257,7 +257,7 @@ def test_note_area_routes_to_sessions_no_link(tmp_path):
         frontmatter=_make_frontmatter(note_type="note"),
         config=config,
     )
-    assert result.destination == tmp_path / "sessions"
+    assert result.destination == tmp_path / "ops" / "sessions"
     assert result.project_link_target is None
 
 
@@ -276,7 +276,7 @@ def test_note_project_routes_to_sessions_with_link_target(tmp_path):
     # Frontmatter.type=project is the routing-key for context+project
     # (section update), not for note+project. Distinguish via the
     # original detection.type (note) vs the frontmatter.type (project).
-    assert result.destination == tmp_path / "sessions"
+    assert result.destination == tmp_path / "ops" / "sessions"
     assert result.project_link_target == tmp_path / "projects" / "launch-redesign.md"
     assert result.is_section_update is False
 
@@ -298,7 +298,7 @@ def test_archive_para_flags_without_auto_routing(tmp_path):
     assert result.archive_flagged is True
     # Destination is the would-be target if archive were ignored, so the
     # orchestrator can offer "route here, or move to archive/".
-    assert result.destination == tmp_path / "sessions"
+    assert result.destination == tmp_path / "ops" / "sessions"
 
 
 def test_archive_flagged_for_insight(tmp_path):
@@ -618,7 +618,7 @@ def test_route_does_not_create_destination_folder(tmp_path):
         frontmatter=_make_frontmatter(note_type="session"),
         config=config,
     )
-    assert not (tmp_path / "sessions").exists()
+    assert not (tmp_path / "ops" / "sessions").exists()
 
 
 def test_route_does_not_create_inbox_folder(tmp_path):
@@ -676,3 +676,49 @@ def test_fixed_domains_mode_requires_para(tmp_path):
             frontmatter=_make_frontmatter(note_type="session"),
             config=config,
         )
+
+
+# ---------------------------------------------------------------------------
+# Round 10: domain-scoped routing (Fix 3 - M1.1 patch)
+# In fixed_domains mode, session-type notes route to <domain>/sessions/
+# instead of the flat sessions/ folder.
+# ---------------------------------------------------------------------------
+
+
+def test_session_area_routes_into_domain_subfolder(tmp_path):
+    """session + area with domain=ops routes to ops/sessions/."""
+    config = _make_config(vault_path=tmp_path)
+    result = route(
+        detection=_make_detection("session"),
+        classification=_make_classification(primary="ops"),
+        para=_make_para(category="area"),
+        frontmatter=_make_frontmatter(note_type="session", domain="ops"),
+        config=config,
+    )
+    assert result.destination == tmp_path / "ops" / "sessions"
+
+
+def test_note_area_routes_into_domain_subfolder(tmp_path):
+    """note + area with domain=ops routes to ops/sessions/."""
+    config = _make_config(vault_path=tmp_path)
+    result = route(
+        detection=_make_detection("note"),
+        classification=_make_classification(primary="ops"),
+        para=_make_para(category="area"),
+        frontmatter=_make_frontmatter(note_type="note", domain="ops"),
+        config=config,
+    )
+    assert result.destination == tmp_path / "ops" / "sessions"
+
+
+def test_different_domain_routes_to_its_own_subfolder(tmp_path):
+    """Branding domain session routes to branding/sessions/, not ops/sessions/."""
+    config = _make_config(vault_path=tmp_path)
+    result = route(
+        detection=_make_detection("session"),
+        classification=_make_classification(primary="branding"),
+        para=_make_para(category="area"),
+        frontmatter=_make_frontmatter(note_type="session", domain="branding"),
+        config=config,
+    )
+    assert result.destination == tmp_path / "branding" / "sessions"

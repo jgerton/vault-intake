@@ -75,7 +75,6 @@ def _make_fixed_domains_vault(
     vault = tmp_path / "vault"
     vault.mkdir()
     for folder in (
-        "sessions",
         "insights",
         "workflows",
         "prompts",
@@ -85,6 +84,9 @@ def _make_fixed_domains_vault(
         "_inbox",
     ):
         (vault / folder).mkdir()
+    # Domain-scoped session folders (ops, branding, dev match _make_config defaults).
+    for domain_slug in ("ops", "branding", "dev"):
+        (vault / domain_slug / "sessions").mkdir(parents=True)
 
     for slug in project_slugs:
         project_md = vault / "projects" / f"{slug}.md"
@@ -94,7 +96,7 @@ def _make_fixed_domains_vault(
         )
 
     for filename, title, domain in sibling_notes:
-        note = vault / "sessions" / filename
+        note = vault / domain / "sessions" / filename
         domain_line = f"\ndomain: {domain}" if domain else ""
         note.write_text(
             f"---\ntitle: {title}\ntype: session{domain_line}\n---\n# {title}\n",
@@ -632,7 +634,7 @@ class TestIntakeQuestionShape:
         assert by_kind[QuestionKind.CLASSIFICATION].content_snippet is None
 
     def test_content_snippet_truncates_long_body(self):
-        """Snippet from a very long body is capped at reasonable length."""
+        """Snippet from a very long body is capped at max_chars=200."""
         from vault_intake.orchestrator import QuestionKind
         body = "Word. " * 200
         questions = collect_questions(
@@ -647,7 +649,27 @@ class TestIntakeQuestionShape:
         by_kind = {q.kind: q for q in questions}
         snippet = by_kind[QuestionKind.CLASSIFICATION].content_snippet
         assert snippet is not None
-        assert len(snippet) <= 300
+        assert len(snippet) <= 200
+
+    def test_content_snippet_strips_frontmatter_and_headings(self):
+        """Frontmatter fence and leading headings are excluded from the snippet."""
+        from vault_intake.orchestrator import QuestionKind
+        body = "---\ntitle: test\n---\n# My Heading\nReal content sentence one. Sentence two."
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=True, primary="ops"),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            body=body,
+        )
+        by_kind = {q.kind: q for q in questions}
+        snippet = by_kind[QuestionKind.CLASSIFICATION].content_snippet
+        assert snippet is not None
+        assert "title:" not in snippet
+        assert "My Heading" not in snippet
+        assert "Real content" in snippet
 
     def test_non_classification_questions_have_no_snippet(self):
         """content_snippet is None for DETECTION_TYPE, PARA, ROUTE_ARCHIVE, TITLE."""
@@ -711,9 +733,9 @@ class TestRunIntakeGoldenPath:
         config = _make_config(vault_path=vault)
         result = run_intake(_OPS_INPUT, config)
         # Document classifies as "note" via document signal; PARA=area;
-        # spec table puts (note, area) -> sessions/.
+        # spec table puts (note, area) -> <domain>/sessions/.
         assert result.route is not None
-        assert result.route.destination == vault / "sessions"
+        assert result.route.destination == vault / "ops" / "sessions"
 
     def test_golden_path_classifies_to_ops(self, tmp_path):
         vault = _make_fixed_domains_vault(tmp_path)
@@ -821,7 +843,7 @@ class TestRunIntakeParaProjectOverride:
         assert result.frontmatter.type == "project"
         assert result.frontmatter.project == "launch-redesign"
         assert result.route is not None
-        assert result.route.destination == vault / "sessions"
+        assert result.route.destination == vault / "ops" / "sessions"
         assert result.route.project_link_target == vault / "projects" / "launch-redesign.md"
 
 

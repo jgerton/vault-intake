@@ -10,9 +10,9 @@ from pathlib import Path
 
 from .config import Config
 
-# Directories created unconditionally (mode-agnostic).
+# Directories created unconditionally (mode-agnostic). `sessions` is not
+# here; domain-scoped <domain>/sessions/ dirs are created per domain instead.
 _STANDARD_DIRS: tuple[str, ...] = (
-    "sessions",
     "insights",
     "workflows",
     "prompts",
@@ -48,6 +48,11 @@ def bootstrap_vault(config: Config) -> list[Path]:
         d = vault / name
         d.mkdir(parents=True, exist_ok=True)
         ensured.append(d)
+
+    for domain in config.domains:
+        sessions_dir = vault / domain.slug / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        ensured.append(sessions_dir)
 
     queue_dir = vault / _QUEUE_DIR
     queue_dir.mkdir(parents=True, exist_ok=True)
