@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import difflib
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -94,6 +95,7 @@ class QuestionKind(StrEnum):
     PARA = "para.category"
     ROUTE_ARCHIVE = "route.archive"
     FRONTMATTER_TITLE = "frontmatter.title"
+    REFINEMENT_ACCEPT = "refinement.accept"
     NOT_IMPLEMENTED = "not_implemented"
 
 
@@ -104,13 +106,16 @@ class IntakeQuestion:
     `prompt` is the user-facing text. `suggested` is the current value
     the user can accept (None for `NOT_IMPLEMENTED`, where there is no
     choice to make). `step` is set only when `kind == NOT_IMPLEMENTED`
-    to identify which pipeline step was skipped.
+    to identify which pipeline step was skipped. `content_snippet` is
+    set only for CLASSIFICATION questions; it carries a short excerpt
+    of the note body so the user can confirm the domain with context.
     """
 
     kind: QuestionKind
     prompt: str
     suggested: str | None
     step: str | None = None
+    content_snippet: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -190,9 +195,10 @@ class IntakeRun:
         if self.para is not None:
             lines.append(f"PARA: {self.para.category}")
 
-        # Destination
+        # Destination + routing rationale
         if self.route is not None:
             lines.append(f"Destination: {self.route.destination}")
+            lines.append(f"Route: {self.route.reason}")
 
         # Wikilinks
         if self.wikilinks is not None:
@@ -210,11 +216,16 @@ class IntakeRun:
         nlm_text = _format_notebooklm(self.notebooklm)
         lines.append(f"NotebookLM: {nlm_text}")
 
-        # Captura original
+        # Refinement status
         if self.refinement is not None and self.refinement.changed:
-            lines.append("Captura original: preserved")
+            orig_lines = self.refinement.original.splitlines()
+            new_lines = self.refinement.refined.splitlines()
+            n_changed = sum(
+                1 for a, b in zip(orig_lines, new_lines) if a != b
+            ) + abs(len(orig_lines) - len(new_lines))
+            lines.append(f"Refinement: {n_changed} line(s) changed (original preserved)")
         else:
-            lines.append("Captura original: not needed")
+            lines.append("Refinement: no changes (original preserved)")
 
         # Queue surface (when nonzero)
         if self.queued_nlm_count > 0:
@@ -288,6 +299,51 @@ def assemble_final_markdown(
     return "\n".join(parts) + "\n"
 
 
+def _format_refinement_diff(original: str, refined: str, *, max_lines: int = 20) -> str:
+    """Return a unified-diff string for the refinement change, capped at max_lines."""
+    diff = list(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        refined.splitlines(keepends=True),
+        fromfile="original",
+        tofile="refined",
+        lineterm="",
+    ))
+    if not diff:
+        return ""
+    lines = diff[:max_lines]
+    result = "\n".join(lines)
+    remaining = len(diff) - max_lines
+    if remaining > 0:
+        result += f"\n... [{remaining} more diff lines]"
+    return result
+
+
+def _extract_content_snippet(body: str, *, max_chars: int = 200) -> str:
+    """Return a short excerpt from body for classification context.
+
+    Takes up to 3 sentences or max_chars characters, whichever is shorter.
+    Strips YAML frontmatter fences and markdown headings from the start.
+    """
+    # Strip leading frontmatter block (---...---) if present.
+    text = re.sub(r"\A---\n.*?\n---\n", "", body, count=1, flags=re.DOTALL)
+    # Strip leading markdown headings.
+    text = re.sub(r"^#{1,6}[^\n]*\n", "", text.lstrip(), flags=re.MULTILINE)
+    text = text.strip()
+    if not text:
+        return ""
+    # Split on sentence-ending punctuation followed by whitespace or end.
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    snippet = ""
+    for sentence in sentences[:3]:
+        candidate = (snippet + " " + sentence).strip() if snippet else sentence
+        if len(candidate) > max_chars:
+            break
+        snippet = candidate
+    if not snippet:
+        snippet = text[:max_chars]
+    return snippet.strip()
+
+
 def collect_questions(
     *,
     detection: DetectionResult,
@@ -296,6 +352,8 @@ def collect_questions(
     route: RouteResult | None,
     frontmatter: Frontmatter | None,
     not_implemented: tuple[str, ...] = (),
+    body: str = "",
+    refinement: RefinedContent | None = None,
 ) -> tuple[IntakeQuestion, ...]:
     """Collect uncertainty signals into a tuple of `IntakeQuestion`.
 
@@ -308,6 +366,16 @@ def collect_questions(
     `IntakeRun` field without parsing prompt text.
     """
     questions: list[IntakeQuestion] = []
+    if refinement is not None and refinement.changed:
+        diff_snippet = _format_refinement_diff(refinement.original, refinement.refined)
+        questions.append(
+            IntakeQuestion(
+                kind=QuestionKind.REFINEMENT_ACCEPT,
+                prompt="Step 2 refined your text; accept changes? [Y/n]",
+                suggested="y",
+                content_snippet=diff_snippet or None,
+            )
+        )
     if detection.uncertain:
         questions.append(
             IntakeQuestion(
@@ -317,11 +385,13 @@ def collect_questions(
             )
         )
     if classification is not None and classification.uncertain:
+        snippet = _extract_content_snippet(body) if body else None
         questions.append(
             IntakeQuestion(
                 kind=QuestionKind.CLASSIFICATION,
                 prompt=f"I classified as `{classification.primary}`; correct?",
                 suggested=classification.primary,
+                content_snippet=snippet or None,
             )
         )
     if para is not None and para.uncertain:
@@ -543,6 +613,8 @@ def run_intake(
         route=route_result,
         frontmatter=frontmatter,
         not_implemented=tuple(not_implemented),
+        body=body,
+        refinement=refinement,
     )
 
     queued_this_run = (

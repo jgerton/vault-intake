@@ -75,7 +75,6 @@ def _make_fixed_domains_vault(
     vault = tmp_path / "vault"
     vault.mkdir()
     for folder in (
-        "sessions",
         "insights",
         "workflows",
         "prompts",
@@ -85,6 +84,9 @@ def _make_fixed_domains_vault(
         "_inbox",
     ):
         (vault / folder).mkdir()
+    # Domain-scoped session folders (ops, branding, dev match _make_config defaults).
+    for domain_slug in ("ops", "branding", "dev"):
+        (vault / domain_slug / "sessions").mkdir(parents=True)
 
     for slug in project_slugs:
         project_md = vault / "projects" / f"{slug}.md"
@@ -94,7 +96,7 @@ def _make_fixed_domains_vault(
         )
 
     for filename, title, domain in sibling_notes:
-        note = vault / "sessions" / filename
+        note = vault / domain / "sessions" / filename
         domain_line = f"\ndomain: {domain}" if domain else ""
         note.write_text(
             f"---\ntitle: {title}\ntype: session{domain_line}\n---\n# {title}\n",
@@ -599,6 +601,158 @@ class TestIntakeQuestionShape:
         # informational only; no value to suggest
         assert all(q.suggested is None for q in not_impl)
 
+    def test_classification_question_carries_content_snippet_when_body_given(self):
+        """CLASSIFICATION question gets a non-None content_snippet when body is passed."""
+        from vault_intake.orchestrator import QuestionKind
+        body = "First sentence about ops. Second sentence about infra. Third one here."
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=True, primary="ops"),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            body=body,
+        )
+        by_kind = {q.kind: q for q in questions}
+        assert QuestionKind.CLASSIFICATION in by_kind
+        assert by_kind[QuestionKind.CLASSIFICATION].content_snippet is not None
+        assert len(by_kind[QuestionKind.CLASSIFICATION].content_snippet) > 0
+
+    def test_content_snippet_is_none_when_no_body_given(self):
+        """CLASSIFICATION question content_snippet is None when body is not passed."""
+        from vault_intake.orchestrator import QuestionKind
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=True, primary="ops"),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+        )
+        by_kind = {q.kind: q for q in questions}
+        assert by_kind[QuestionKind.CLASSIFICATION].content_snippet is None
+
+    def test_content_snippet_truncates_long_body(self):
+        """Snippet from a very long body is capped at max_chars=200."""
+        from vault_intake.orchestrator import QuestionKind
+        body = "Word. " * 200
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=True, primary="ops"),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            body=body,
+        )
+        by_kind = {q.kind: q for q in questions}
+        snippet = by_kind[QuestionKind.CLASSIFICATION].content_snippet
+        assert snippet is not None
+        assert len(snippet) <= 200
+
+    def test_content_snippet_strips_frontmatter_and_headings(self):
+        """Frontmatter fence and leading headings are excluded from the snippet."""
+        from vault_intake.orchestrator import QuestionKind
+        body = "---\ntitle: test\n---\n# My Heading\nReal content sentence one. Sentence two."
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=True, primary="ops"),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            body=body,
+        )
+        by_kind = {q.kind: q for q in questions}
+        snippet = by_kind[QuestionKind.CLASSIFICATION].content_snippet
+        assert snippet is not None
+        assert "title:" not in snippet
+        assert "My Heading" not in snippet
+        assert "Real content" in snippet
+
+    def test_non_classification_questions_have_no_snippet(self):
+        """content_snippet is None for DETECTION_TYPE, PARA, ROUTE_ARCHIVE, TITLE."""
+        from vault_intake.orchestrator import QuestionKind
+        questions = collect_questions(
+            detection=_make_detection(uncertain=True, content_type="prompt"),
+            classification=_make_classification(uncertain=False),
+            para=_make_para(uncertain=True, category="archive"),
+            route=_make_route(archive_flagged=True),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            body="Some content here.",
+        )
+        for q in questions:
+            if q.kind != QuestionKind.CLASSIFICATION:
+                assert q.content_snippet is None, f"{q.kind} should have no snippet"
+
+    def test_refinement_accept_question_added_when_changed(self):
+        """REFINEMENT_ACCEPT question is generated when refinement.changed."""
+        from vault_intake.orchestrator import QuestionKind
+        from vault_intake.refine import RefinedContent
+        changed = RefinedContent(
+            original="ok so like here is the content man.",
+            refined="Here is the content.",
+            changed=True,
+        )
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=False),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            refinement=changed,
+        )
+        kinds = {q.kind for q in questions}
+        assert QuestionKind.REFINEMENT_ACCEPT in kinds
+
+    def test_refinement_accept_question_has_diff_snippet(self):
+        """REFINEMENT_ACCEPT question carries a diff-format content_snippet."""
+        from vault_intake.orchestrator import QuestionKind
+        from vault_intake.refine import RefinedContent
+        changed = RefinedContent(
+            original="ok so like here is the content man.",
+            refined="Here is the content.",
+            changed=True,
+        )
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=False),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            refinement=changed,
+        )
+        by_kind = {q.kind: q for q in questions}
+        q = by_kind[QuestionKind.REFINEMENT_ACCEPT]
+        assert q.content_snippet is not None
+        # Diff markers from unified_diff output.
+        assert "---" in q.content_snippet or "+++" in q.content_snippet
+
+    def test_refinement_accept_not_added_when_unchanged(self):
+        """No REFINEMENT_ACCEPT question when refinement.changed is False."""
+        from vault_intake.orchestrator import QuestionKind
+        from vault_intake.refine import RefinedContent
+        unchanged = RefinedContent(
+            original="content",
+            refined="content",
+            changed=False,
+        )
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=False),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            refinement=unchanged,
+        )
+        kinds = {q.kind for q in questions}
+        assert QuestionKind.REFINEMENT_ACCEPT not in kinds
+
     def test_intake_run_questions_field_holds_intake_questions(self, tmp_path):
         """End-to-end `run_intake` returns an IntakeRun whose
         `questions` tuple is structured."""
@@ -645,9 +799,9 @@ class TestRunIntakeGoldenPath:
         config = _make_config(vault_path=vault)
         result = run_intake(_OPS_INPUT, config)
         # Document classifies as "note" via document signal; PARA=area;
-        # spec table puts (note, area) -> sessions/.
+        # spec table puts (note, area) -> <domain>/sessions/.
         assert result.route is not None
-        assert result.route.destination == vault / "sessions"
+        assert result.route.destination == vault / "ops" / "sessions"
 
     def test_golden_path_classifies_to_ops(self, tmp_path):
         vault = _make_fixed_domains_vault(tmp_path)
@@ -755,7 +909,7 @@ class TestRunIntakeParaProjectOverride:
         assert result.frontmatter.type == "project"
         assert result.frontmatter.project == "launch-redesign"
         assert result.route is not None
-        assert result.route.destination == vault / "sessions"
+        assert result.route.destination == vault / "ops" / "sessions"
         assert result.route.project_link_target == vault / "projects" / "launch-redesign.md"
 
 
@@ -1008,7 +1162,7 @@ class TestIntakeRunSummary:
         assert "Wikilinks:" in summary
         assert "Next steps:" in summary
         assert "NotebookLM:" in summary
-        assert "Captura original:" in summary
+        assert "Refinement:" in summary
 
     def test_summary_emergent_uses_theme_label(self, tmp_path):
         # Even though classify NotImplemented in emergent mode, summary()
@@ -1034,17 +1188,38 @@ class TestIntakeRunSummary:
         assert "2 item(s) queued for NotebookLM" in summary
         assert "notebooklm login" in summary
 
-    def test_summary_captura_preserved_when_changed(self, tmp_path):
+    def test_summary_refinement_changed_shows_refinement_line(self, tmp_path):
+        """When refinement.changed, summary has 'Refinement:' line (not 'Captura original:')."""
         vault = _make_fixed_domains_vault(tmp_path)
         config = _make_config(vault_path=vault, refinement_enabled=True)
         text = _build_transcription()
         result = run_intake(text, config)
         summary = result.summary()
-        assert "Captura original: preserved" in summary
+        assert "Refinement:" in summary
+        assert "Captura original:" not in summary
 
-    def test_summary_captura_not_needed_when_not_refined(self, tmp_path):
+    def test_summary_refinement_no_changes_preserved(self, tmp_path):
+        """When refinement did not change text, summary shows 'Refinement: no changes'."""
         vault = _make_fixed_domains_vault(tmp_path)
         config = _make_config(vault_path=vault)
         result = run_intake("# Doc\n\nShort.", config)
         summary = result.summary()
-        assert "Captura original: not needed" in summary
+        assert "Refinement: no changes" in summary
+        assert "Captura original:" not in summary
+
+    def test_summary_includes_route_rationale(self, tmp_path):
+        """Route: line appears in summary when routing succeeded."""
+        vault = _make_fixed_domains_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        result = run_intake(_OPS_INPUT, config)
+        summary = result.summary()
+        assert "Route:" in summary
+
+    def test_summary_route_rationale_contains_type_and_dest(self, tmp_path):
+        """Route: line includes the type and destination slug from the reason string."""
+        vault = _make_fixed_domains_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        result = run_intake(_OPS_INPUT, config)
+        assert result.route is not None
+        summary = result.summary()
+        assert result.route.reason in summary
