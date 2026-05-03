@@ -76,6 +76,23 @@ _SCHEMA_VERSION = "1.0"
 _H1_PATTERN = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 _SENTENCE_BOUNDARY_PATTERN = re.compile(r"[.!?]+\s+")
 
+# Filler/discourse words that should not become note titles. Keyed by
+# language code. When a title candidate starts with one of these words
+# the heuristic skips to the next candidate sentence.
+_STOPWORDS: dict[str, frozenset[str]] = {
+    "en": frozenset({"ok", "so", "well", "right", "yeah", "yes", "no"}),
+    "pt-BR": frozenset({
+        "certo", "ok", "entao", "ne", "bom", "bem", "enfim", "tipo",
+        "assim", "olha", "veja", "cara", "ei", "ah", "oh", "então",
+        "né", "oi", "ola", "hey",
+    }),
+    "pt": frozenset({
+        "certo", "ok", "entao", "ne", "bom", "bem", "enfim", "tipo",
+        "assim", "olha", "veja", "cara", "ei", "ah", "oh", "então",
+        "né", "oi", "ola", "hey",
+    }),
+}
+
 
 # Translation from Step 1's 7-value detection enum to the
 # fixed_domains frontmatter's 8-value type enum (build spec line 128).
@@ -177,7 +194,13 @@ def generate_frontmatter(
     captured = captured_at or date.today().isoformat()
     note_date = captured.split("T", 1)[0]
 
-    title = _build_title(text, fallback_date=note_date)
+    is_braindump = detection.type == "note" and detection.refinement_applicable
+    title = _build_title(
+        text,
+        fallback_date=note_date,
+        language=config.language,
+        is_braindump=is_braindump,
+    )
     tags = _build_tags(classification)
     notebook = config.notebook_map.get(classification.primary, "")
     project = para.project_slug or "" if para.category == "project" else ""
@@ -218,32 +241,65 @@ def _derive_note_type(detection: DetectionResult, para: ParaResult) -> NoteType:
     return _DETECTION_TO_FRONTMATTER_TYPE[detection.type]
 
 
-def _build_title(text: str, *, fallback_date: str) -> str:
-    source = _extract_title_source(text)
+def _build_title(
+    text: str,
+    *,
+    fallback_date: str,
+    language: str = "en",
+    is_braindump: bool = False,
+) -> str:
+    stopwords = _STOPWORDS.get(language, _STOPWORDS["en"])
+    source = _extract_title_source(text, stopwords=stopwords)
     slug = _slugify(source)
+    if is_braindump:
+        if slug:
+            return f"braindump-{slug}-{fallback_date}"
+        return f"braindump-{fallback_date}"
     if not slug:
         return f"note-{fallback_date}"
     return slug
 
 
-def _extract_title_source(text: str) -> str:
+def _extract_title_source(text: str, *, stopwords: frozenset[str] = frozenset()) -> str:
     match = _H1_PATTERN.search(text)
     if match:
-        return match.group(1)
+        candidate = match.group(1)
+        if not _is_filler(candidate, stopwords):
+            return candidate
     stripped = text.strip()
     if not stripped:
         return ""
     sentences = _split_sentences(stripped)
     if not sentences:
         return stripped
-    # Prefer the first sentence whose slug fits the cap naturally.
-    # Avoids ugly truncation when the opening sentence runs long but a
-    # later one is short and on-topic.
+    # Prefer the first sentence whose slug fits the cap naturally and is
+    # not a filler word. Avoids ugly truncation and filler-as-title names.
     for sentence in sentences:
+        if _is_filler(sentence, stopwords):
+            continue
         slug = _slug_normalize(sentence)
         if slug and len(slug) <= _TITLE_MAX_CHARS:
             return sentence
+    # No short-enough non-filler sentence; fall back to first non-filler
+    # or first sentence if all are filler.
+    for sentence in sentences:
+        if not _is_filler(sentence, stopwords):
+            return sentence
     return sentences[0]
+
+
+def _is_filler(text: str, stopwords: frozenset[str]) -> bool:
+    """Return True when `text` consists entirely of stopwords or starts with one.
+
+    Normalizes to lowercase ASCII so accented variants ("entao" matches
+    "então") and mixed-case inputs are handled consistently.
+    """
+    if not stopwords or not text.strip():
+        return False
+    normalized = unicodedata.normalize("NFKD", text.strip())
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    first_word = re.split(r"[^a-z0-9]+", ascii_text)[0]
+    return first_word in stopwords
 
 
 def _split_sentences(text: str) -> list[str]:

@@ -795,3 +795,122 @@ def test_to_yaml_field_order_is_canonical(tmp_path: Path) -> None:
         f"  actual:   {actual_keys}\n"
         f"  yaml:     {yaml_text!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: pt-BR stopword filtering + braindump naming (M1.1)
+# ---------------------------------------------------------------------------
+
+
+def _make_ptbr_config(tmp_path: Path) -> "Config":
+    """Config with language=pt-BR for stopword tests."""
+    import dataclasses
+    return dataclasses.replace(_make_config(tmp_path), language="pt-BR")
+
+
+def test_ptbr_filler_word_as_h1_is_skipped(tmp_path: Path) -> None:
+    """H1 that is a bare pt-BR filler word falls back to first content sentence."""
+    config = _make_ptbr_config(tmp_path)
+    fm = generate_frontmatter(
+        text="# Certo\n\nMinha marca pessoal no mercado digital.",
+        detection=_make_detection(type="note"),
+        refinement=None,
+        classification=_make_classification(primary="ops"),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title != "certo"
+    assert "marca" in fm.title or "pessoal" in fm.title or "digital" in fm.title
+
+
+def test_ptbr_filler_at_sentence_start_is_skipped(tmp_path: Path) -> None:
+    """First sentence starting with a pt-BR filler word is skipped; next used."""
+    config = _make_ptbr_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Certo, entao vou falar. Criando uma estrategia de marca.",
+        detection=_make_detection(type="note"),
+        refinement=None,
+        classification=_make_classification(primary="ops"),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert not fm.title.startswith("certo")
+    assert "criando" in fm.title or "estrategia" in fm.title or "marca" in fm.title
+
+
+def test_en_stopwords_not_applied_to_ptbr_config(tmp_path: Path) -> None:
+    """Common English content words are not treated as stopwords in pt-BR mode."""
+    config = _make_ptbr_config(tmp_path)
+    fm = generate_frontmatter(
+        text="# Ok so here is the plan for branding.",
+        detection=_make_detection(type="note"),
+        refinement=None,
+        classification=_make_classification(primary="ops"),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title != "note-2026-05-02"
+
+
+def test_braindump_title_uses_braindump_prefix(tmp_path: Path) -> None:
+    """Notes with refinement_applicable=True use braindump-<slug>-date naming."""
+    config = _make_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Quick brain dump about the deployment pipeline and rollout plan.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_classification(primary="ops"),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title.startswith("braindump-")
+
+
+def test_braindump_title_includes_date_suffix(tmp_path: Path) -> None:
+    """Braindump title ends with the capture date."""
+    config = _make_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Some unstructured thoughts about the ops rollout.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_classification(primary="ops"),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title.endswith("-2026-05-02")
+
+
+def test_braindump_with_ptbr_filler_skips_filler(tmp_path: Path) -> None:
+    """Braindump in pt-BR vault skips filler words in the slug."""
+    config = _make_ptbr_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Certo entao. Estrategia de posicionamento de marca.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_classification(primary="ops"),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title.startswith("braindump-")
+    assert not fm.title.startswith("braindump-certo")
+
+
+def test_non_braindump_note_unchanged(tmp_path: Path) -> None:
+    """Regular note (refinement_applicable=False) is not prefixed with braindump."""
+    config = _make_config(tmp_path)
+    fm = generate_frontmatter(
+        text="# My structured note\n\nWith clear heading.",
+        detection=_make_detection(type="note", refinement_applicable=False),
+        refinement=None,
+        classification=_make_classification(primary="ops"),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert not fm.title.startswith("braindump-")
