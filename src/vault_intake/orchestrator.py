@@ -190,9 +190,10 @@ class IntakeRun:
         if self.para is not None:
             lines.append(f"PARA: {self.para.category}")
 
-        # Destination
+        # Destination + routing rationale
         if self.route is not None:
             lines.append(f"Destination: {self.route.destination}")
+            lines.append(f"Route: {self.route.reason}")
 
         # Wikilinks
         if self.wikilinks is not None:

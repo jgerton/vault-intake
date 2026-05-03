@@ -1048,3 +1048,20 @@ class TestIntakeRunSummary:
         result = run_intake("# Doc\n\nShort.", config)
         summary = result.summary()
         assert "Captura original: not needed" in summary
+
+    def test_summary_includes_route_rationale(self, tmp_path):
+        """Route: line appears in summary when routing succeeded."""
+        vault = _make_fixed_domains_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        result = run_intake(_OPS_INPUT, config)
+        summary = result.summary()
+        assert "Route:" in summary
+
+    def test_summary_route_rationale_contains_type_and_dest(self, tmp_path):
+        """Route: line includes the type and destination slug from the reason string."""
+        vault = _make_fixed_domains_vault(tmp_path)
+        config = _make_config(vault_path=vault)
+        result = run_intake(_OPS_INPUT, config)
+        assert result.route is not None
+        summary = result.summary()
+        assert result.route.reason in summary
