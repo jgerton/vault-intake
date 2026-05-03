@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import datetime as _dt
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Iterable, get_args
@@ -107,11 +109,26 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force-disable Step 9 NotebookLM integration for this run.",
     )
+    parser.add_argument(
+        "--inbox",
+        action="store_true",
+        help=(
+            "Batch-process all .md files in {vault}/inbox/. "
+            "Mutually exclusive with --input."
+        ),
+    )
     return parser
 
 
 def main(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
+
+    if args.inbox and args.input:
+        print(
+            "error: --inbox and --input are mutually exclusive",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_ERROR
 
     if args.title is not None:
         # Empty/whitespace `--title` would silently produce a blank
@@ -129,6 +146,9 @@ def main(argv: list[str]) -> int:
     config = _resolve_config_from_args(args)
     if config is None:
         return EXIT_CONFIG_ERROR
+
+    if args.inbox:
+        return _run_inbox(config, args)
 
     input_text = _read_input(args)
     if input_text is None:
@@ -412,6 +432,141 @@ def _attempt_write(run: IntakeRun, config: Config, args: argparse.Namespace) -> 
     print()
     print(result.summary())
     return EXIT_SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# --inbox batch mode
+# ---------------------------------------------------------------------------
+
+
+def _run_inbox(config: Config, args: argparse.Namespace) -> int:
+    inbox_dir = config.vault_path / "inbox"
+    if not inbox_dir.is_dir():
+        print("inbox/ is empty")
+        return EXIT_SUCCESS
+
+    md_files = sorted(p for p in inbox_dir.iterdir() if p.is_file() and p.suffix == ".md")
+    if not md_files:
+        print("inbox/ is empty")
+        return EXIT_SUCCESS
+
+    # Dry-run pass for each file; collect runs.
+    runs: list[tuple[Path, IntakeRun | None, str | None]] = []
+    for path in md_files:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            runs.append((path, None, f"read error: {exc}"))
+            continue
+        try:
+            run = run_intake(
+                text,
+                config,
+                source_type=args.source_type,
+                source_uri=args.source_uri or path.name,
+                nlm_command=args.nlm_command,
+            )
+        except Exception as exc:  # noqa: BLE001 - guarded as in single-file path
+            runs.append((path, None, f"pipeline error: {exc}"))
+            continue
+        runs.append((path, run, None))
+
+    print(f"Inbox batch: {len(md_files)} file(s)")
+    print()
+    for path, run, err in runs:
+        if err is not None or run is None:
+            print(f"  {path.name}  ERROR  {err or 'pipeline returned None'}")
+            continue
+        dest = _format_destination(run)
+        primary = (
+            run.classification.primary if run.classification is not None else "?"
+        )
+        type_label = (
+            run.detection.type if run.detection is not None else "?"
+        )
+        print(f"  {path.name}  type={type_label}  slug={primary}  -> {dest}")
+    print()
+
+    if args.dry_run:
+        print("dry-run; not writing")
+        return EXIT_SUCCESS
+
+    if not args.yes:
+        try:
+            confirmed = _prompt_batch_confirmation(len(md_files))
+        except (KeyboardInterrupt, EOFError):
+            print("\naborted", file=sys.stderr)
+            return EXIT_USER_ABORTED
+        if not confirmed:
+            print("aborted", file=sys.stderr)
+            return EXIT_USER_ABORTED
+
+    written = 0
+    skipped = 0
+    failed = 0
+    for path, run, err in runs:
+        if err is not None or run is None:
+            failed += 1
+            print(f"  {path.name}  FAILED  {err or 'pipeline returned None'}")
+            continue
+        try:
+            confirm_and_write(
+                run,
+                config,
+                nlm_command=args.nlm_command,
+                overwrite=args.overwrite,
+            )
+        except FileExistsError:
+            skipped += 1
+            print(f"  {path.name}  SKIPPED  destination exists (use --overwrite)")
+            continue
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            failed += 1
+            print(f"  {path.name}  FAILED  {exc}")
+            continue
+        try:
+            _archive_inbox_file(path, config.vault_path)
+        except OSError as exc:
+            # Note already written; archive failure is warning-level.
+            print(f"  {path.name}  WARN  archive move failed: {exc}", file=sys.stderr)
+        written += 1
+        print(f"  {path.name}  WRITTEN")
+
+    print()
+    print(f"written: {written} / skipped: {skipped} / failed: {failed}")
+
+    if failed > 0 and written == 0:
+        return EXIT_PIPELINE_ERROR
+    return EXIT_SUCCESS
+
+
+def _format_destination(run: IntakeRun) -> str:
+    if run.route is None or run.frontmatter is None:
+        return "?"
+    if run.route.is_section_update:
+        return str(run.route.destination)
+    return str(run.route.destination / f"{run.frontmatter.title}.md")
+
+
+def _prompt_batch_confirmation(n: int) -> bool:
+    print(f"Write {n} note(s)? [y/N]")
+    answer = input("  > ").strip().lower()
+    return answer in ("y", "yes")
+
+
+def _archive_inbox_file(source: Path, vault_path: Path) -> None:
+    """Move processed inbox file to .vault-intake/inbox-processed/.
+
+    Existing archive entries with the same filename are preserved by
+    appending a UTC timestamp suffix to the new file's stem.
+    """
+    archive_dir = vault_path / ".vault-intake" / "inbox-processed"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    target = archive_dir / source.name
+    if target.exists():
+        ts = _dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+        target = archive_dir / f"{source.stem}-{ts}{source.suffix}"
+    shutil.move(str(source), str(target))
 
 
 if __name__ == "__main__":
