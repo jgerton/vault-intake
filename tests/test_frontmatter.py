@@ -508,20 +508,6 @@ def test_confidence_preserved_as_float(tmp_path: Path) -> None:
     assert fm.confidence == 0.73
 
 
-def test_emergent_mode_raises_not_implemented(tmp_path: Path) -> None:
-    config = _make_config(tmp_path, mode="emergent", domains=())
-
-    with pytest.raises(NotImplementedError, match=r"emergent"):
-        generate_frontmatter(
-            text="Body.",
-            detection=_make_detection(),
-            refinement=None,
-            classification=_make_classification(mode="emergent"),
-            para=_make_para(),
-            config=config,
-            captured_at="2026-04-29",
-        )
-
 
 def test_captured_at_defaults_to_today_iso(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
@@ -630,6 +616,7 @@ def test_to_yaml_emits_empty_string_for_none_confidence(tmp_path: Path) -> None:
         date=fm.date,
         type=fm.type,
         domain=fm.domain,
+        theme=fm.theme,
         tags=fm.tags,
         notebook=fm.notebook,
         source_id=fm.source_id,
@@ -721,6 +708,7 @@ def test_insight_and_workflow_frontmatter_types_are_valid(tmp_path: Path) -> Non
         date="2026-04-29",
         type="insight",
         domain="ops",
+        theme="",
         tags=("ops",),
         notebook="",
         source_id="",
@@ -741,6 +729,7 @@ def test_insight_and_workflow_frontmatter_types_are_valid(tmp_path: Path) -> Non
         date="2026-04-29",
         type="workflow",
         domain="ops",
+        theme="",
         tags=("ops",),
         notebook="",
         source_id="",
@@ -914,3 +903,306 @@ def test_non_braindump_note_unchanged(tmp_path: Path) -> None:
         captured_at="2026-05-02",
     )
     assert not fm.title.startswith("braindump-")
+
+
+# ---------------------------------------------------------------------------
+# Item 5 (M2): compact braindump title uses domain/theme slug
+# ---------------------------------------------------------------------------
+
+
+def test_braindump_in_fixed_domains_uses_domain_slug(tmp_path: Path) -> None:
+    """Braindump title in fixed_domains mode uses domain slug, not sentence."""
+    config = _make_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Quero falar sobre minha estrategia de posicionamento no mercado.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_classification(primary="ops", confidence=0.8),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title == "braindump-ops-2026-05-02"
+
+
+def test_braindump_in_fixed_domains_same_day_no_collision(tmp_path: Path) -> None:
+    """When no existing braindump file for that domain+date, no counter appended."""
+    config = _make_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Short braindump about ops.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_classification(primary="branding", confidence=0.8),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title == "braindump-branding-2026-05-02"
+
+
+def test_braindump_title_falls_back_to_sentence_when_classification_uncertain(
+    tmp_path: Path,
+) -> None:
+    """Uncertain classification means primary is unreliable; fall back to sentence slug."""
+    config = _make_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Estrategia de posicionamento no mercado.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_classification(primary="ops", confidence=0.3, uncertain=True),
+        para=_make_para(category="area"),
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title.startswith("braindump-")
+    assert "ops" not in fm.title
+
+
+# ---------------------------------------------------------------------------
+# Item 1 (M2): emergent mode frontmatter
+# ---------------------------------------------------------------------------
+
+
+def _make_emergent_config(
+    vault_path: Path,
+    *,
+    notebook_map: dict[str, str] | None = None,
+) -> "Config":
+    return Config(
+        vault_path=vault_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType(dict(notebook_map or {})),
+        language="pt-BR",
+        skip_notebooklm=False,
+        refinement_enabled=True,
+        classification_confidence_threshold=0.6,
+    )
+
+
+def _make_emergent_classification(
+    *,
+    primary: str = "posicionamento",
+    secondary: tuple[str, ...] = (),
+    confidence: float = 0.8,
+    uncertain: bool = False,
+) -> ClassificationResult:
+    return ClassificationResult(
+        primary=primary,
+        secondary=secondary,
+        confidence=confidence,
+        uncertain=uncertain,
+        mode="emergent",
+    )
+
+
+def test_emergent_mode_no_longer_raises(tmp_path: Path) -> None:
+    """Emergent mode now generates frontmatter rather than raising NotImplementedError."""
+    config = _make_emergent_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Braindump sobre posicionamento.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_emergent_classification(),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert isinstance(fm, Frontmatter)
+
+
+def test_emergent_frontmatter_has_theme_field(tmp_path: Path) -> None:
+    """Emergent frontmatter exposes theme from classification.primary."""
+    config = _make_emergent_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Braindump sobre posicionamento.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_emergent_classification(primary="posicionamento"),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.theme == "posicionamento"
+
+
+def test_emergent_frontmatter_yaml_has_theme_not_domain(tmp_path: Path) -> None:
+    """Emergent YAML emits `theme:` and omits `domain:`."""
+    config = _make_emergent_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Braindump sobre marca.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_emergent_classification(primary="marca"),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    loaded = yaml.safe_load(fm.to_yaml())
+    assert "theme" in loaded
+    assert "domain" not in loaded
+    assert loaded["theme"] == "marca"
+
+
+def test_emergent_frontmatter_yaml_omits_project(tmp_path: Path) -> None:
+    """Emergent YAML does not emit a `project` field."""
+    config = _make_emergent_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Braindump sobre marca.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_emergent_classification(),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    loaded = yaml.safe_load(fm.to_yaml())
+    assert "project" not in loaded
+
+
+def test_emergent_frontmatter_notebook_lookup_by_theme(tmp_path: Path) -> None:
+    """notebook_map is keyed by theme slug in emergent mode."""
+    config = _make_emergent_config(
+        tmp_path, notebook_map={"posicionamento": "nb-pos-id"}
+    )
+    fm = generate_frontmatter(
+        text="Braindump sobre posicionamento.",
+        detection=_make_detection(type="note"),
+        refinement=None,
+        classification=_make_emergent_classification(primary="posicionamento"),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.notebook == "nb-pos-id"
+
+
+def test_emergent_frontmatter_notebook_miss_returns_empty(tmp_path: Path) -> None:
+    config = _make_emergent_config(
+        tmp_path, notebook_map={"outros": "nb-outros-id"}
+    )
+    fm = generate_frontmatter(
+        text="Braindump sobre marca.",
+        detection=_make_detection(type="note"),
+        refinement=None,
+        classification=_make_emergent_classification(primary="marca"),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.notebook == ""
+
+
+def test_emergent_frontmatter_type_derivation_same_table(tmp_path: Path) -> None:
+    """Same detection-to-frontmatter type table applies in emergent mode."""
+    config = _make_emergent_config(tmp_path)
+    for det_type, expected_fm_type in [
+        ("session", "session"),
+        ("document", "note"),
+        ("reference", "reference"),
+        ("context", "context"),
+        ("prompt", "prompt"),
+        ("transcription", "note"),
+        ("note", "note"),
+    ]:
+        fm = generate_frontmatter(
+            text="Body.",
+            detection=_make_detection(type=det_type),
+            refinement=None,
+            classification=_make_emergent_classification(),
+            para=None,
+            config=config,
+            captured_at="2026-05-02",
+        )
+        assert fm.type == expected_fm_type, f"detection {det_type!r}: expected {expected_fm_type!r}, got {fm.type!r}"
+
+
+def test_emergent_frontmatter_degraded_theme_is_empty_string(tmp_path: Path) -> None:
+    """When Step 3 degraded (primary empty), theme is empty string in YAML."""
+    config = _make_emergent_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Body.",
+        detection=_make_detection(type="note"),
+        refinement=None,
+        classification=_make_emergent_classification(primary="", confidence=0.0, uncertain=True),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    loaded = yaml.safe_load(fm.to_yaml())
+    assert "theme" in loaded
+    assert loaded["theme"] == ""
+
+
+def test_emergent_frontmatter_para_none_accepted(tmp_path: Path) -> None:
+    """para=None is valid in emergent mode and does not raise."""
+    config = _make_emergent_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Body.",
+        detection=_make_detection(type="note"),
+        refinement=None,
+        classification=_make_emergent_classification(),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert isinstance(fm, Frontmatter)
+
+
+def test_emergent_braindump_uses_theme_slug(tmp_path: Path) -> None:
+    """Braindump in emergent mode uses theme slug for compact title."""
+    config = _make_emergent_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Vou falar sobre minha estrategia de posicionamento.",
+        detection=_make_detection(type="note", refinement_applicable=True),
+        refinement=None,
+        classification=_make_emergent_classification(
+            primary="posicionamento", confidence=0.8
+        ),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    assert fm.title == "braindump-posicionamento-2026-05-02"
+
+
+def test_emergent_frontmatter_yaml_field_order(tmp_path: Path) -> None:
+    """Emergent YAML field order: OS-wide baseline, then theme, tags, notebook, source_id."""
+    config = _make_emergent_config(tmp_path)
+    fm = generate_frontmatter(
+        text="Braindump sobre marca.",
+        detection=_make_detection(type="note"),
+        refinement=None,
+        classification=_make_emergent_classification(primary="marca"),
+        para=None,
+        config=config,
+        captured_at="2026-05-02",
+    )
+    yaml_text = fm.to_yaml()
+    actual_keys = [
+        line.split(":", 1)[0]
+        for line in yaml_text.splitlines()
+        if line and not line.startswith((" ", "-"))
+    ]
+    expected_order = [
+        "schema_version",
+        "source_type",
+        "source_uri",
+        "captured_at",
+        "processed_by",
+        "confidence",
+        "original_ref",
+        "title",
+        "date",
+        "type",
+        "theme",
+        "tags",
+        "notebook",
+        "source_id",
+    ]
+    assert actual_keys == expected_order, (
+        f"Emergent YAML field order drifted.\n"
+        f"  expected: {expected_order}\n"
+        f"  actual:   {actual_keys}\n"
+        f"  yaml:     {yaml_text!r}"
+    )

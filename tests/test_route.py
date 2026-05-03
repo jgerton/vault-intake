@@ -105,6 +105,7 @@ def _make_frontmatter(
         date="2026-04-30",
         type=note_type,
         domain=domain,
+        theme="",
         tags=(),
         notebook="",
         source_id="",

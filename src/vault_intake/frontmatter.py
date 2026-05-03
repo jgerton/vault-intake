@@ -130,11 +130,14 @@ class Frontmatter:
     title: str
     date: str
 
-    # Fixed_domains track additions (build spec line 128 closes `type`
-    # to a fixed enum; emergent track will use a parallel shape with
-    # `theme` instead of `domain` and an open `type` enum)
-    type: NoteType
+    # Track-specific fields. In fixed_domains mode: `domain` and `project`
+    # are populated; `theme` is empty. In emergent mode: `theme` is
+    # populated; `domain` and `project` are empty. `to_yaml()` emits the
+    # right shape based on which is set. `type` is a closed enum in
+    # fixed_domains; open (any string) in emergent.
+    type: str
     domain: str
+    theme: str
     tags: tuple[str, ...]
     notebook: str
     source_id: str
@@ -146,9 +149,10 @@ class Frontmatter:
         Field order matches the architecture plan baseline (OS-wide
         first, then cross-track, then track-specific) so diffs stay
         readable. None confidence emits as an empty string per the
-        baseline's "optional" rule.
+        baseline's "optional" rule. When `theme` is set (emergent mode),
+        emits `theme` instead of `domain` and omits `project`.
         """
-        ordered: list[tuple[str, object]] = [
+        base: list[tuple[str, object]] = [
             ("schema_version", self.schema_version),
             ("source_type", self.source_type),
             ("source_uri", self.source_uri),
@@ -159,14 +163,26 @@ class Frontmatter:
             ("title", self.title),
             ("date", self.date),
             ("type", self.type),
-            ("domain", self.domain),
-            ("tags", list(self.tags)),
-            ("notebook", self.notebook),
-            ("source_id", self.source_id),
-            ("project", self.project),
         ]
+        if self.domain:
+            # fixed_domains shape
+            track: list[tuple[str, object]] = [
+                ("domain", self.domain),
+                ("tags", list(self.tags)),
+                ("notebook", self.notebook),
+                ("source_id", self.source_id),
+                ("project", self.project),
+            ]
+        else:
+            # emergent shape: theme replaces domain; project omitted
+            track = [
+                ("theme", self.theme),
+                ("tags", list(self.tags)),
+                ("notebook", self.notebook),
+                ("source_id", self.source_id),
+            ]
         return yaml.safe_dump(
-            dict(ordered),
+            dict(base + track),
             sort_keys=False,
             allow_unicode=True,
             default_flow_style=False,
@@ -178,35 +194,72 @@ def generate_frontmatter(
     detection: DetectionResult,
     refinement: RefinedContent | None,
     classification: ClassificationResult,
-    para: ParaResult,
+    para: ParaResult | None,
     config: Config,
     *,
     source_type: SourceType = "paste",
     source_uri: str = "",
     captured_at: str | None = None,
 ) -> Frontmatter:
-    if config.mode == "emergent":
-        raise NotImplementedError(
-            "emergent mode frontmatter is not implemented in v1; "
-            "use classification_mode: fixed_domains for now"
-        )
-
     captured = captured_at or date.today().isoformat()
     note_date = captured.split("T", 1)[0]
 
     is_braindump = detection.type == "note" and detection.refinement_applicable
+    original_ref = (
+        _ORIGINAL_REF_MARKER if refinement is not None and refinement.changed else ""
+    )
+    tags = _build_tags(classification)
+
+    if config.mode == "emergent":
+        domain_or_theme = (
+            classification.primary
+            if classification.primary and not classification.uncertain
+            else ""
+        )
+        title = _build_title(
+            text,
+            fallback_date=note_date,
+            language=config.language,
+            is_braindump=is_braindump,
+            domain_or_theme=domain_or_theme,
+        )
+        notebook = config.notebook_map.get(classification.primary, "")
+        note_type = _DETECTION_TO_FRONTMATTER_TYPE[detection.type]
+        return Frontmatter(
+            schema_version=_SCHEMA_VERSION,
+            source_type=source_type,
+            source_uri=source_uri,
+            captured_at=captured,
+            processed_by=_PROCESSED_BY,
+            confidence=classification.confidence,
+            original_ref=original_ref,
+            title=title,
+            date=note_date,
+            type=note_type,
+            domain="",
+            theme=classification.primary,
+            tags=tags,
+            notebook=notebook,
+            source_id="",
+            project="",
+        )
+
+    # fixed_domains path
+    assert para is not None, "para must be provided for fixed_domains mode"
+    domain_or_theme = (
+        classification.primary
+        if classification.primary and not classification.uncertain
+        else ""
+    )
     title = _build_title(
         text,
         fallback_date=note_date,
         language=config.language,
         is_braindump=is_braindump,
+        domain_or_theme=domain_or_theme,
     )
-    tags = _build_tags(classification)
     notebook = config.notebook_map.get(classification.primary, "")
     project = para.project_slug or "" if para.category == "project" else ""
-    original_ref = (
-        _ORIGINAL_REF_MARKER if refinement is not None and refinement.changed else ""
-    )
     note_type = _derive_note_type(detection, para)
 
     return Frontmatter(
@@ -221,6 +274,7 @@ def generate_frontmatter(
         date=note_date,
         type=note_type,
         domain=classification.primary,
+        theme="",
         tags=tags,
         notebook=notebook,
         source_id="",
@@ -247,14 +301,19 @@ def _build_title(
     fallback_date: str,
     language: str = "en",
     is_braindump: bool = False,
+    domain_or_theme: str = "",
 ) -> str:
     stopwords = _STOPWORDS.get(language, _STOPWORDS["en"])
-    source = _extract_title_source(text, stopwords=stopwords)
-    slug = _slugify(source)
     if is_braindump:
+        if domain_or_theme:
+            return f"braindump-{domain_or_theme}-{fallback_date}"
+        source = _extract_title_source(text, stopwords=stopwords)
+        slug = _slugify(source)
         if slug:
             return f"braindump-{slug}-{fallback_date}"
         return f"braindump-{fallback_date}"
+    source = _extract_title_source(text, stopwords=stopwords)
+    slug = _slugify(source)
     if not slug:
         return f"note-{fallback_date}"
     return slug

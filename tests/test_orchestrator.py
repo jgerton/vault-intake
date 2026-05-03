@@ -228,6 +228,7 @@ def _make_frontmatter(
         date="2026-04-30",
         type=type_,  # type: ignore[arg-type]
         domain=domain,
+        theme="",
         tags=("ops",),
         notebook="",
         source_id=source_id,
