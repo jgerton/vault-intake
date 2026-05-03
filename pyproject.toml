@@ -1,7 +1,7 @@
 [project]
 name = "vault-intake"
-version = "0.1.0"
-description = "Memory Branch M1: trusted capture skill for Second-Brain vaults"
+version = "0.2.0"
+description = "Memory Branch M2: trusted capture skill for Second-Brain vaults (fixed_domains + emergent modes)"
 requires-python = ">=3.12"
 license = "AGPL-3.0-only"
 authors = [
