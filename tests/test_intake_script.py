@@ -535,3 +535,124 @@ class TestSkipNotebookLM:
         )
         assert result.returncode == 0, result.stderr
         assert "NotebookLM: skipped" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Item 4 (M2): --inbox batch flag
+# ---------------------------------------------------------------------------
+
+
+def _seed_inbox(vault: Path, files: dict[str, str]) -> Path:
+    inbox = vault / "inbox"
+    inbox.mkdir(exist_ok=True)
+    for name, body in files.items():
+        (inbox / name).write_text(body, encoding="utf-8")
+    return inbox
+
+
+class TestInboxFlag:
+    def test_empty_inbox_exits_zero(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        (vault / "inbox").mkdir()
+        result = _run(["--vault", str(vault), "--inbox", "--yes"])
+        assert result.returncode == 0, result.stderr
+        assert "inbox/ is empty" in result.stdout
+
+    def test_missing_inbox_dir_exits_zero_with_empty_message(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        # Do not create inbox/.
+        result = _run(["--vault", str(vault), "--inbox", "--yes"])
+        assert result.returncode == 0, result.stderr
+        assert "inbox/ is empty" in result.stdout
+
+    def test_inbox_and_input_mutually_exclusive(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        input_file = tmp_path / "in.md"
+        input_file.write_text(_OPS_INPUT, encoding="utf-8")
+        result = _run(
+            ["--vault", str(vault), "--inbox", "--input", str(input_file), "--yes"],
+        )
+        assert result.returncode == 2  # EXIT_CONFIG_ERROR
+        assert "mutually exclusive" in result.stderr.lower()
+
+    def test_single_file_processed_and_moved_to_archive(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        _seed_inbox(vault, {"note1.md": _OPS_INPUT})
+        result = _run(["--vault", str(vault), "--inbox", "--yes"])
+        assert result.returncode == 0, result.stderr
+        # Inbox now empty
+        assert list((vault / "inbox").glob("*.md")) == []
+        # Source moved to processed archive
+        archive = vault / ".vault-intake" / "inbox-processed"
+        assert (archive / "note1.md").exists()
+        # Note written to vault
+        sessions = vault / "ops" / "sessions"
+        assert len(list(sessions.glob("*.md"))) == 1
+
+    def test_multiple_files_all_processed(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        _seed_inbox(
+            vault,
+            {
+                "note-a.md": _OPS_INPUT,
+                "note-b.md": "# Branding voice\n\nbrand identity messaging design.\n",
+            },
+        )
+        result = _run(["--vault", str(vault), "--inbox", "--yes"])
+        assert result.returncode == 0, result.stderr
+        assert list((vault / "inbox").glob("*.md")) == []
+        archive = vault / ".vault-intake" / "inbox-processed"
+        assert (archive / "note-a.md").exists()
+        assert (archive / "note-b.md").exists()
+
+    def test_non_md_files_skipped(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        inbox = _seed_inbox(vault, {"note.md": _OPS_INPUT})
+        (inbox / "image.png").write_bytes(b"\x89PNG\r\n")
+        (inbox / "notes.txt").write_text("ignored", encoding="utf-8")
+        result = _run(["--vault", str(vault), "--inbox", "--yes"])
+        assert result.returncode == 0, result.stderr
+        # Non-md files remain in inbox; only the .md was processed.
+        assert (inbox / "image.png").exists()
+        assert (inbox / "notes.txt").exists()
+        assert not (inbox / "note.md").exists()
+
+    def test_dry_run_does_not_write_or_move(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        inbox = _seed_inbox(vault, {"note.md": _OPS_INPUT})
+        result = _run(
+            ["--vault", str(vault), "--inbox", "--yes", "--dry-run"],
+        )
+        assert result.returncode == 0, result.stderr
+        # Source still in inbox
+        assert (inbox / "note.md").exists()
+        # No archive directory created (or it's empty)
+        archive = vault / ".vault-intake" / "inbox-processed"
+        if archive.exists():
+            assert list(archive.glob("*")) == []
+        # No notes written to vault sessions
+        assert list((vault / "ops" / "sessions").glob("*.md")) == []
+
+    def test_summary_reports_counts(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        _seed_inbox(vault, {"a.md": _OPS_INPUT, "b.md": _OPS_INPUT})
+        result = _run(["--vault", str(vault), "--inbox", "--yes"])
+        assert result.returncode == 0, result.stderr
+        assert "written:" in result.stdout
+        assert "skipped:" in result.stdout
+        assert "failed:" in result.stdout
+
+    def test_archive_collision_appends_timestamp(self, tmp_path):
+        vault = _build_vault(tmp_path)
+        archive = vault / ".vault-intake" / "inbox-processed"
+        archive.mkdir(parents=True)
+        # Pre-existing archive entry with the same filename.
+        (archive / "note.md").write_text("OLD", encoding="utf-8")
+        _seed_inbox(vault, {"note.md": _OPS_INPUT})
+        result = _run(["--vault", str(vault), "--inbox", "--yes"])
+        assert result.returncode == 0, result.stderr
+        # Original archive entry preserved.
+        assert (archive / "note.md").read_text(encoding="utf-8") == "OLD"
+        # New archive entry has a timestamp suffix (more than one .md now).
+        archived = list(archive.glob("note*.md"))
+        assert len(archived) == 2
