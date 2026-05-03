@@ -520,10 +520,9 @@ def run_intake(
 
     # Step 6: wikilinks.
     wikilinks: WikilinkResult | None = None
-    if (
-        classification is not None
-        and config.mode == "fixed_domains"
-        and para is not None
+    if classification is not None and (
+        config.mode == "emergent"
+        or (config.mode == "fixed_domains" and para is not None)
     ):
         try:
             wikilinks = generate_wikilinks(

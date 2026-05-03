@@ -114,7 +114,7 @@ class _Candidate:
 def generate_wikilinks(
     text: str,
     classification: ClassificationResult,
-    para: ParaResult,
+    para: ParaResult | None,
     config: Config,
     *,
     max_proposals: int = _DEFAULT_MAX_PROPOSALS,

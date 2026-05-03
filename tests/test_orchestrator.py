@@ -1037,14 +1037,12 @@ class TestRunIntakeEmergentMode:
             mode="emergent",
             domains=(),
         )
-        # Step 3 (classify) raises NotImplementedError under emergent.
-        # Orchestrator must catch and surface as a question rather than
-        # propagating. Downstream steps that depend on classification
-        # also short-circuit cleanly.
+        # Steps 3 (classify), 5 (frontmatter) now work in emergent mode.
+        # Only Step 6 (wikilinks) still raises NotImplementedError.
         result = run_intake(_OPS_INPUT, config)
         assert isinstance(result, IntakeRun)
-        assert result.classification is None
-        assert any("classify" in q.prompt for q in result.questions)
+        assert result.classification is not None
+        assert result.classification.mode == "emergent"
 
     def test_emergent_mode_step7_still_runs(self, tmp_path):
         vault = _make_emergent_vault(tmp_path)
@@ -1054,18 +1052,16 @@ class TestRunIntakeEmergentMode:
         # Step 7 is mode-agnostic; it should still run even when classify failed.
         assert result.next_actions.gate_fired is True
 
-    def test_emergent_mode_full_cascade_in_questions(self, tmp_path):
-        # Codex review R "EMERGENT_SKIPS_NOT_SURFACED" 2026-04-30: when emergent
-        # classify raises, Steps 4-6 are also blocked under emergent v1; the
-        # orchestrator surfaces the full cascade so the user understands the run
-        # was incomplete, not just that classify alone was missing.
+    def test_emergent_mode_wikilinks_cascade_in_questions(self, tmp_path):
+        # Steps 3 (classify) and 5 (frontmatter) now work in emergent mode.
+        # Only Step 6 (wikilinks) still raises NotImplementedError and is
+        # surfaced as a question.
         vault = _make_emergent_vault(tmp_path)
         config = _make_config(vault_path=vault, mode="emergent", domains=())
         result = run_intake(_OPS_INPUT, config)
         questions_blob = "\n".join(q.prompt for q in result.questions)
-        assert "classify" in questions_blob
-        assert "categorize_para" in questions_blob
-        assert "generate_frontmatter" in questions_blob
+        assert "classify" not in questions_blob
+        assert "generate_frontmatter" not in questions_blob
         assert "generate_wikilinks" in questions_blob
 
 
@@ -1166,16 +1162,14 @@ class TestIntakeRunSummary:
         assert "Refinement:" in summary
 
     def test_summary_emergent_uses_theme_label(self, tmp_path):
-        # Even though classify NotImplemented in emergent mode, summary()
-        # should still compose without raising. Theme/Domain label depends
-        # on whether classification is set.
+        # Steps 3 (classify) and 5 (frontmatter) now work in emergent mode.
+        # Summary should emit "Theme:" not "Domain:" for emergent runs.
         vault = _make_emergent_vault(tmp_path)
         config = _make_config(vault_path=vault, mode="emergent", domains=())
         result = run_intake(_OPS_INPUT, config)
         summary = result.summary()
-        # Domain/Theme line is only emitted when classification exists.
         assert "Domain:" not in summary
-        assert "Theme:" not in summary
+        assert "Theme:" in summary
 
     def test_summary_queued_surface(self, tmp_path):
         vault = _make_fixed_domains_vault(tmp_path)
