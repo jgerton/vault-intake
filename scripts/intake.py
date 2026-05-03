@@ -492,8 +492,9 @@ def _run_inbox(config: Config, args: argparse.Namespace) -> int:
         return EXIT_SUCCESS
 
     if not args.yes:
+        processable = sum(1 for _p, run, err in runs if run is not None and err is None)
         try:
-            confirmed = _prompt_batch_confirmation(len(md_files))
+            confirmed = _prompt_batch_confirmation(processable)
         except (KeyboardInterrupt, EOFError):
             print("\naborted", file=sys.stderr)
             return EXIT_USER_ABORTED

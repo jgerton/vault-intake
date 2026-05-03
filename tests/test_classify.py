@@ -299,3 +299,17 @@ def test_emergent_classify_deduplicates_folder_and_frontmatter_sources(
     assert result.primary == "posicionamento"
     # Should not appear twice in secondary
     assert result.secondary.count("posicionamento") == 0
+
+
+def test_emergent_classify_handles_utf8_bom_in_frontmatter(tmp_path: Path) -> None:
+    """Codex review C-1 (2026-05-02): markdown files saved with a UTF-8 BOM
+    (common on Windows) must still surface their `theme` frontmatter value
+    as a candidate. _collect_emergent_themes reads with utf-8-sig; this
+    test pins that codec choice."""
+    note = tmp_path / "nota.md"
+    note.write_bytes(
+        "﻿---\ntheme: marca\n---\nCorpo.".encode("utf-8")
+    )
+    config = _make_emergent_config(tmp_path)
+    result = classify("Quero falar sobre marca no mercado.", config)
+    assert result.primary == "marca"
