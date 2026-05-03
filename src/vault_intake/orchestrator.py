@@ -104,13 +104,16 @@ class IntakeQuestion:
     `prompt` is the user-facing text. `suggested` is the current value
     the user can accept (None for `NOT_IMPLEMENTED`, where there is no
     choice to make). `step` is set only when `kind == NOT_IMPLEMENTED`
-    to identify which pipeline step was skipped.
+    to identify which pipeline step was skipped. `content_snippet` is
+    set only for CLASSIFICATION questions; it carries a short excerpt
+    of the note body so the user can confirm the domain with context.
     """
 
     kind: QuestionKind
     prompt: str
     suggested: str | None
     step: str | None = None
+    content_snippet: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +292,32 @@ def assemble_final_markdown(
     return "\n".join(parts) + "\n"
 
 
+def _extract_content_snippet(body: str, *, max_chars: int = 200) -> str:
+    """Return a short excerpt from body for classification context.
+
+    Takes up to 3 sentences or max_chars characters, whichever is shorter.
+    Strips YAML frontmatter fences and markdown headings from the start.
+    """
+    # Strip leading frontmatter block (---...---) if present.
+    text = re.sub(r"\A---\n.*?\n---\n", "", body, count=1, flags=re.DOTALL)
+    # Strip leading markdown headings.
+    text = re.sub(r"^#{1,6}[^\n]*\n", "", text.lstrip(), flags=re.MULTILINE)
+    text = text.strip()
+    if not text:
+        return ""
+    # Split on sentence-ending punctuation followed by whitespace or end.
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    snippet = ""
+    for sentence in sentences[:3]:
+        candidate = (snippet + " " + sentence).strip() if snippet else sentence
+        if len(candidate) > max_chars:
+            break
+        snippet = candidate
+    if not snippet:
+        snippet = text[:max_chars]
+    return snippet.strip()
+
+
 def collect_questions(
     *,
     detection: DetectionResult,
@@ -297,6 +326,7 @@ def collect_questions(
     route: RouteResult | None,
     frontmatter: Frontmatter | None,
     not_implemented: tuple[str, ...] = (),
+    body: str = "",
 ) -> tuple[IntakeQuestion, ...]:
     """Collect uncertainty signals into a tuple of `IntakeQuestion`.
 
@@ -318,11 +348,13 @@ def collect_questions(
             )
         )
     if classification is not None and classification.uncertain:
+        snippet = _extract_content_snippet(body) if body else None
         questions.append(
             IntakeQuestion(
                 kind=QuestionKind.CLASSIFICATION,
                 prompt=f"I classified as `{classification.primary}`; correct?",
                 suggested=classification.primary,
+                content_snippet=snippet or None,
             )
         )
     if para is not None and para.uncertain:
@@ -544,6 +576,7 @@ def run_intake(
         route=route_result,
         frontmatter=frontmatter,
         not_implemented=tuple(not_implemented),
+        body=body,
     )
 
     queued_this_run = (

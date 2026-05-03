@@ -272,6 +272,9 @@ def _prompt_for_questions(
         if question.kind in skip_set:
             continue
         print()
+        if question.content_snippet:
+            print(f"Content preview: {question.content_snippet}")
+            print()
         print(question.prompt)
         if question.kind == QuestionKind.NOT_IMPLEMENTED:
             # Informational only; no answer to collect.

@@ -599,6 +599,72 @@ class TestIntakeQuestionShape:
         # informational only; no value to suggest
         assert all(q.suggested is None for q in not_impl)
 
+    def test_classification_question_carries_content_snippet_when_body_given(self):
+        """CLASSIFICATION question gets a non-None content_snippet when body is passed."""
+        from vault_intake.orchestrator import QuestionKind
+        body = "First sentence about ops. Second sentence about infra. Third one here."
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=True, primary="ops"),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            body=body,
+        )
+        by_kind = {q.kind: q for q in questions}
+        assert QuestionKind.CLASSIFICATION in by_kind
+        assert by_kind[QuestionKind.CLASSIFICATION].content_snippet is not None
+        assert len(by_kind[QuestionKind.CLASSIFICATION].content_snippet) > 0
+
+    def test_content_snippet_is_none_when_no_body_given(self):
+        """CLASSIFICATION question content_snippet is None when body is not passed."""
+        from vault_intake.orchestrator import QuestionKind
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=True, primary="ops"),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+        )
+        by_kind = {q.kind: q for q in questions}
+        assert by_kind[QuestionKind.CLASSIFICATION].content_snippet is None
+
+    def test_content_snippet_truncates_long_body(self):
+        """Snippet from a very long body is capped at reasonable length."""
+        from vault_intake.orchestrator import QuestionKind
+        body = "Word. " * 200
+        questions = collect_questions(
+            detection=_make_detection(),
+            classification=_make_classification(uncertain=True, primary="ops"),
+            para=_make_para(),
+            route=_make_route(),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            body=body,
+        )
+        by_kind = {q.kind: q for q in questions}
+        snippet = by_kind[QuestionKind.CLASSIFICATION].content_snippet
+        assert snippet is not None
+        assert len(snippet) <= 300
+
+    def test_non_classification_questions_have_no_snippet(self):
+        """content_snippet is None for DETECTION_TYPE, PARA, ROUTE_ARCHIVE, TITLE."""
+        from vault_intake.orchestrator import QuestionKind
+        questions = collect_questions(
+            detection=_make_detection(uncertain=True, content_type="prompt"),
+            classification=_make_classification(uncertain=False),
+            para=_make_para(uncertain=True, category="archive"),
+            route=_make_route(archive_flagged=True),
+            frontmatter=_make_frontmatter(),
+            not_implemented=(),
+            body="Some content here.",
+        )
+        for q in questions:
+            if q.kind != QuestionKind.CLASSIFICATION:
+                assert q.content_snippet is None, f"{q.kind} should have no snippet"
+
     def test_intake_run_questions_field_holds_intake_questions(self, tmp_path):
         """End-to-end `run_intake` returns an IntakeRun whose
         `questions` tuple is structured."""
