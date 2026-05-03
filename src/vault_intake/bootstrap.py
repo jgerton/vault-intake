@@ -27,22 +27,30 @@ _QUEUE_DIR = Path(".vault-intake") / "nlm_queue"
 
 
 def bootstrap_vault(config: Config) -> list[Path]:
-    """Create standard vault directories under config.vault_path.
+    """Ensure standard vault directories exist under config.vault_path.
 
     Returns a list of all directory paths that were ensured (whether they
     already existed or were newly created). Never deletes or modifies
     existing content.
+
+    Raises ValueError if vault_path already exists as a file (not a
+    directory), since child directory creation would fail non-obviously.
     """
     vault = config.vault_path
-    created: list[Path] = []
+    if vault.exists() and not vault.is_dir():
+        raise ValueError(
+            f"vault_path {vault!r} exists but is not a directory"
+        )
+
+    ensured: list[Path] = []
 
     for name in _STANDARD_DIRS:
         d = vault / name
         d.mkdir(parents=True, exist_ok=True)
-        created.append(d)
+        ensured.append(d)
 
     queue_dir = vault / _QUEUE_DIR
     queue_dir.mkdir(parents=True, exist_ok=True)
-    created.append(queue_dir)
+    ensured.append(queue_dir)
 
-    return created
+    return ensured

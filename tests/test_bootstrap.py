@@ -1,8 +1,7 @@
 """Tests for vault_intake.bootstrap.bootstrap_vault.
 
 Covers: standard directory creation, inbox/ inclusion, idempotency,
-and domain-scoped sessions/ subdirectories (pre-wired for Fix 3 but
-gated on the domain_scoped_routing flag).
+return-value completeness, and error handling for invalid vault_path.
 """
 from __future__ import annotations
 
@@ -13,7 +12,7 @@ import pytest
 import yaml
 
 from vault_intake.config import resolve_config
-from vault_intake.bootstrap import bootstrap_vault
+from vault_intake.bootstrap import bootstrap_vault, _STANDARD_DIRS, _QUEUE_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +129,15 @@ def test_bootstrap_is_idempotent(tmp_path):
     assert (tmp_path / "sessions").is_dir()
 
 
+def test_bootstrap_idempotent_returns_full_list_on_second_call(tmp_path):
+    """Second call still returns the full ensured-paths list."""
+    config = _make_config(tmp_path)
+    bootstrap_vault(config)
+    ensured = bootstrap_vault(config)
+    expected = [tmp_path / name for name in _STANDARD_DIRS] + [tmp_path / _QUEUE_DIR]
+    assert set(ensured) == set(expected)
+
+
 def test_bootstrap_preserves_existing_files(tmp_path):
     """A pre-existing file inside sessions/ is not deleted by bootstrap."""
     config = _make_config(tmp_path)
@@ -141,15 +149,45 @@ def test_bootstrap_preserves_existing_files(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Round 4: return value
+# Round 4: return value completeness
 # ---------------------------------------------------------------------------
 
 
-def test_bootstrap_returns_list_of_created_paths(tmp_path):
-    """bootstrap_vault returns a list of Path objects for all dirs created."""
+def test_bootstrap_returns_complete_ensured_paths(tmp_path):
+    """bootstrap_vault returns every directory it is responsible for."""
     config = _make_config(tmp_path)
-    created = bootstrap_vault(config)
-    assert isinstance(created, list)
-    assert all(isinstance(p, Path) for p in created)
-    assert tmp_path / "inbox" in created
-    assert tmp_path / "sessions" in created
+    ensured = bootstrap_vault(config)
+    assert isinstance(ensured, list)
+    assert all(isinstance(p, Path) for p in ensured)
+    expected = [tmp_path / name for name in _STANDARD_DIRS] + [tmp_path / _QUEUE_DIR]
+    assert set(ensured) == set(expected)
+
+
+def test_bootstrap_ensured_paths_are_all_directories(tmp_path):
+    """Every path returned by bootstrap_vault is an actual directory."""
+    config = _make_config(tmp_path)
+    ensured = bootstrap_vault(config)
+    for path in ensured:
+        assert path.is_dir(), f"{path} is not a directory"
+
+
+# ---------------------------------------------------------------------------
+# Round 5: error handling
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_raises_if_vault_path_is_a_file(tmp_path):
+    """bootstrap_vault raises ValueError when vault_path is a file, not a dir."""
+    file_path = tmp_path / "not-a-vault"
+    file_path.write_text("oops", encoding="utf-8")
+
+    import dataclasses
+    from types import MappingProxyType
+    from vault_intake.config import Config
+
+    config = dataclasses.replace(
+        _make_config(tmp_path),
+        vault_path=file_path,
+    )
+    with pytest.raises(ValueError, match="not a directory"):
+        bootstrap_vault(config)
