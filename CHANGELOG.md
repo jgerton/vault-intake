@@ -2,6 +2,15 @@
 
 All notable changes to vault-intake are documented here.
 
+## [0.2.2] - 2026-05-04
+
+Skill invocation guidance: explicit delegation pattern to keep token cost bounded.
+
+### Added
+
+- SKILL.md `Invocation pattern (token-cost note)` section documenting that conversational invocations should shell out to `scripts/intake.py --inbox` via the Bash tool rather than reading inbox file contents into context.
+- Triggered by Elio Almeida's W5 follow-up question (2026-05-04): how does token cost scale with note size? The honest answer is "it shouldn't" — but only if the skill is invoked via delegation, not by Claude reading files first. This patch makes that pattern explicit.
+
 ## [0.2.1] - 2026-05-03
 
 Documentation patch: clarifies vault management surface ahead of M3 scoping.

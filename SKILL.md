@@ -31,6 +31,18 @@ The orchestrator wires Steps 0-9 into two entrypoints that together return the s
 
 Three user-invocable wrappers live in `scripts/`. After install (`scripts/install_skill.py` syncs the skill to `~/.claude/skills/vault-intake/`), the wrappers run from the install location and resolve their `vault_intake.*` imports through the install's `pyproject.toml` plus `uv` lazy venv setup.
 
+### Invocation pattern (token-cost note)
+
+When a user invokes this skill conversationally (e.g., "process all notes in the inbox," "intake this content into my vault"), **prefer shelling out to the appropriate `scripts/` wrapper via the Bash tool over reading vault files into context**. The pipeline is rule-based Python; the scripts read files from disk and return small summary output (preview, route, confirmation prompts) on stdout. Reading inbox files into the conversation first defeats this design and scales token cost with note length unnecessarily.
+
+Concretely:
+
+- "process the inbox" / "process all notes in the inbox" → `uv run scripts/intake.py --vault <path> --inbox` (then prompt the user for confirmation per the script's normal flow, or pass `--yes` for non-interactive batch).
+- "intake this single file" / "process this note" → `uv run scripts/intake.py --vault <path> --input <file>`.
+- "drain the NotebookLM queue" → `uv run scripts/flush_nlm.py --vault <path>`.
+
+Only read inbox file contents directly into context when the user explicitly asks to see or discuss them ("show me what's in the inbox," "summarize the notes before processing"). For routine intake, delegate to the scripts.
+
 ### `scripts/intake.py`
 
 End-to-end intake CLI; the explicit-confirmation surface for spec safety rule 5. Reads input from stdin or `--input PATH`, runs the orchestrator's dry-run pass, prompts the user (unless `--yes`), then commits via `confirm_and_write`.
