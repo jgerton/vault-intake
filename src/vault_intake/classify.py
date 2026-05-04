@@ -75,7 +75,7 @@ _STOPWORDS: dict[str, frozenset[str]] = {
         "de", "do", "da", "dos", "das",
         "em", "no", "na", "nos", "nas",
         "por", "pelo", "pela", "pelos", "pelas",
-        "para", "pra", "com", "sem", "sob", "sobre", "ate", "até",
+        "para", "pra", "pro", "pros", "pras", "com", "sem", "sob", "sobre", "ate", "até",
         # Conjunctions
         "e", "ou", "mas", "porém", "porem", "porque", "pois", "se",
         "que", "quando", "como", "onde", "ainda", "embora",
@@ -92,7 +92,7 @@ _STOPWORDS: dict[str, frozenset[str]] = {
         # Common adverbs
         "muito", "pouco", "mais", "menos",
         "agora", "depois", "antes", "sempre", "nunca",
-        "aqui", "ali", "lá", "la", "também", "tambem", "então", "entao", "assim",
+        "aqui", "ali", "lá", "la", "ai", "aí", "também", "tambem", "então", "entao", "assim",
         # Question words
         "quem", "qual", "quais", "quanto", "quantos",
     }),
@@ -187,6 +187,14 @@ def classify(text: str, config: Config) -> ClassificationResult:
 
 _SKIP_SYSTEM_PREFIXES = ("_", ".")
 
+# PARA convention top-level directories. After v0.3.0 introduced the
+# PARA-nested layout (bootstrap creates `<vault>/Areas/` for fixed_domains),
+# these names must never become theme candidates in emergent mode. Without
+# this filter, an emergent vault containing a PARA folder (mode-switch or
+# leftover layout) would surface "Areas" as a phantom theme via the
+# alphabetically-first zero-score fallback (Codex P0, v0.3.0 review).
+_SKIP_SYSTEM_DIRS = frozenset({"Areas", "Projects", "Resources", "Archives"})
+
 _FM_FENCE_RE = re.compile(r"\n---\s*(?:\n|$)")
 
 
@@ -209,18 +217,28 @@ def _collect_emergent_themes(vault_path: Path) -> set[str]:
     """Return theme candidates from top-level vault folders and note frontmatter."""
     themes: set[str] = set()
 
-    # Top-level directories (excluding system folders)
+    # Top-level directories (excluding system folders and PARA convention dirs)
     try:
         for entry in vault_path.iterdir():
-            if entry.is_dir() and not entry.name.startswith(_SKIP_SYSTEM_PREFIXES):
-                themes.add(entry.name)
+            if not entry.is_dir():
+                continue
+            if entry.name.startswith(_SKIP_SYSTEM_PREFIXES):
+                continue
+            if entry.name in _SKIP_SYSTEM_DIRS:
+                continue
+            themes.add(entry.name)
     except OSError:
         pass
 
-    # Markdown file frontmatter theme values
+    # Markdown file frontmatter theme values. Walk also skips PARA dirs at
+    # any depth so frontmatter inside e.g. Areas/<domain>/sessions/*.md
+    # doesn't sneak themes back in via the frontmatter path.
     for root, dirs, files in os.walk(vault_path):
         dirs[:] = sorted(
-            d for d in dirs if not d.startswith(_SKIP_SYSTEM_PREFIXES)
+            d
+            for d in dirs
+            if not d.startswith(_SKIP_SYSTEM_PREFIXES)
+            and d not in _SKIP_SYSTEM_DIRS
         )
         for fname in sorted(files):
             if not fname.endswith(".md"):
@@ -304,9 +322,14 @@ def _classify_emergent(text: str, config: Config) -> ClassificationResult:
     )
 
     if primary_score == 0:
+        # Codex P0 (v0.3.0): when no theme candidate scored and no token
+        # qualifies as a proposed theme, refuse to fall back to the
+        # alphabetically-first existing folder. That fallback was the
+        # mechanism through which `Areas/` (or any PARA-nested folder
+        # that slipped past the candidate filter) became a phantom theme.
         proposed = _propose_theme_from_text(text, config.language)
         return ClassificationResult(
-            primary=proposed or primary_theme,
+            primary=proposed,
             secondary=(),
             confidence=0.0,
             uncertain=True,
