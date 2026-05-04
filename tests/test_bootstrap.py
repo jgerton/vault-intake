@@ -48,11 +48,18 @@ def _make_config(tmp_path: Path, extra: dict[str, Any] | None = None) -> Any:
 
 
 def test_bootstrap_creates_sessions(tmp_path):
-    """Flat sessions/ is replaced by <domain>/sessions/ per configured domain."""
+    """v0.3.0: domain-scoped sessions live under PARA-canonical Areas/.
+
+    Elio feedback 2026-05-04: previous flat <domain>/sessions/ at vault root
+    didn't match the PARA mental model. Areas/<domain>/sessions/ does.
+    """
     config = _make_config(tmp_path)
     bootstrap_vault(config)
-    assert (tmp_path / "dev" / "sessions").is_dir()
-    assert (tmp_path / "ops" / "sessions").is_dir()
+    assert (tmp_path / "Areas" / "dev" / "sessions").is_dir()
+    assert (tmp_path / "Areas" / "ops" / "sessions").is_dir()
+    # And the OLD flat layout must NOT have been created.
+    assert not (tmp_path / "dev" / "sessions").exists()
+    assert not (tmp_path / "ops" / "sessions").exists()
 
 
 def test_bootstrap_creates_insights(tmp_path):
@@ -128,7 +135,7 @@ def test_bootstrap_is_idempotent(tmp_path):
     bootstrap_vault(config)
     bootstrap_vault(config)
     assert (tmp_path / "inbox").is_dir()
-    assert (tmp_path / "ops" / "sessions").is_dir()
+    assert (tmp_path / "Areas" / "ops" / "sessions").is_dir()
 
 
 def test_bootstrap_idempotent_returns_full_list_on_second_call(tmp_path):
@@ -138,17 +145,17 @@ def test_bootstrap_idempotent_returns_full_list_on_second_call(tmp_path):
     ensured = bootstrap_vault(config)
     expected = (
         [tmp_path / name for name in _STANDARD_DIRS]
-        + [tmp_path / d.slug / "sessions" for d in config.domains]
+        + [tmp_path / "Areas" / d.slug / "sessions" for d in config.domains]
         + [tmp_path / _QUEUE_DIR]
     )
     assert set(ensured) == set(expected)
 
 
 def test_bootstrap_preserves_existing_files(tmp_path):
-    """A pre-existing file inside ops/sessions/ is not deleted by bootstrap."""
+    """A pre-existing file inside Areas/ops/sessions/ is not deleted by bootstrap."""
     config = _make_config(tmp_path)
-    (tmp_path / "ops" / "sessions").mkdir(parents=True)
-    existing = tmp_path / "ops" / "sessions" / "my-note.md"
+    (tmp_path / "Areas" / "ops" / "sessions").mkdir(parents=True)
+    existing = tmp_path / "Areas" / "ops" / "sessions" / "my-note.md"
     existing.write_text("hello", encoding="utf-8")
     bootstrap_vault(config)
     assert existing.read_text(encoding="utf-8") == "hello"
@@ -167,7 +174,7 @@ def test_bootstrap_returns_complete_ensured_paths(tmp_path):
     assert all(isinstance(p, Path) for p in ensured)
     expected = (
         [tmp_path / name for name in _STANDARD_DIRS]
-        + [tmp_path / d.slug / "sessions" for d in config.domains]
+        + [tmp_path / "Areas" / d.slug / "sessions" for d in config.domains]
         + [tmp_path / _QUEUE_DIR]
     )
     assert set(ensured) == set(expected)
@@ -187,12 +194,12 @@ def test_bootstrap_ensured_paths_are_all_directories(tmp_path):
 
 
 def test_bootstrap_creates_domain_sessions_dirs(tmp_path):
-    """bootstrap_vault creates <domain>/sessions/ for each configured domain."""
+    """bootstrap_vault creates Areas/<domain>/sessions/ for each configured domain."""
     config = _make_config(tmp_path)
     bootstrap_vault(config)
     for domain_slug in ("dev", "ops"):
-        assert (tmp_path / domain_slug / "sessions").is_dir(), (
-            f"missing {domain_slug}/sessions/"
+        assert (tmp_path / "Areas" / domain_slug / "sessions").is_dir(), (
+            f"missing Areas/{domain_slug}/sessions/"
         )
 
 

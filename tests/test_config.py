@@ -48,7 +48,9 @@ def test_applies_defaults_when_optional_fields_missing(write_claude_md, tmp_path
     assert dict(config.notebook_map) == {}
     assert config.language == "en"
     assert config.skip_notebooklm is False
-    assert config.refinement_enabled is True
+    # v0.3.0: default flipped to False per Elio feedback (rule-based refinement
+    # was making text worse; LLM-based refinement is the future answer, not v1).
+    assert config.refinement_enabled is False
 
 
 def test_preserves_explicit_optional_fields(write_claude_md, tmp_path):

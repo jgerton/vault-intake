@@ -128,8 +128,8 @@ def generate_wikilinks(
     # but the function never adds low-quality candidates to satisfy it.
     del min_proposals_target
 
-    vault_notes = tuple(_walk_vault(config.vault_path))
-    body_tokens = _tokenize(text)
+    vault_notes = tuple(_walk_vault(config.vault_path, config.language))
+    body_tokens = _tokenize(text, config.language)
     existing_labels = _collect_existing_labels(vault_notes)
 
     candidates: dict[str, _Candidate] = {}
@@ -277,7 +277,7 @@ def _dedupe_priority(c: _Candidate) -> tuple[int, float, str]:
     return (-c.weight, -c.mtime, path_key)
 
 
-def _walk_vault(vault_path: Path) -> Iterable[_VaultNote]:
+def _walk_vault(vault_path: Path, language: str = "en") -> Iterable[_VaultNote]:
     if not vault_path.is_dir():
         return
     for root, dirs, files in os.walk(vault_path):
@@ -294,12 +294,12 @@ def _walk_vault(vault_path: Path) -> Iterable[_VaultNote]:
             if fname.startswith(".") or not fname.endswith(".md"):
                 continue
             path = Path(root) / fname
-            note = _read_note(path)
+            note = _read_note(path, language)
             if note is not None:
                 yield note
 
 
-def _read_note(path: Path) -> _VaultNote | None:
+def _read_note(path: Path, language: str = "en") -> _VaultNote | None:
     try:
         # `utf-8-sig` strips a UTF-8 BOM if present so the leading `---`
         # frontmatter fence is recognized on notes saved by editors that
@@ -316,7 +316,7 @@ def _read_note(path: Path) -> _VaultNote | None:
     domain = domain_value.strip() if isinstance(domain_value, str) and domain_value.strip() else None
     theme_value = fm.get("theme")
     theme = theme_value.strip() if isinstance(theme_value, str) and theme_value.strip() else None
-    title_tokens = frozenset(_tokenize(label))
+    title_tokens = frozenset(_tokenize(label, language))
     try:
         mtime = path.stat().st_mtime
     except OSError:

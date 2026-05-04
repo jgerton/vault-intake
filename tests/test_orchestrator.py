@@ -86,7 +86,7 @@ def _make_fixed_domains_vault(
         (vault / folder).mkdir()
     # Domain-scoped session folders (ops, branding, dev match _make_config defaults).
     for domain_slug in ("ops", "branding", "dev"):
-        (vault / domain_slug / "sessions").mkdir(parents=True)
+        (vault / "Areas" / domain_slug / "sessions").mkdir(parents=True)
 
     for slug in project_slugs:
         project_md = vault / "projects" / f"{slug}.md"
@@ -802,7 +802,7 @@ class TestRunIntakeGoldenPath:
         # Document classifies as "note" via document signal; PARA=area;
         # spec table puts (note, area) -> <domain>/sessions/.
         assert result.route is not None
-        assert result.route.destination == vault / "ops" / "sessions"
+        assert result.route.destination == vault / "Areas" / "ops" / "sessions"
 
     def test_golden_path_classifies_to_ops(self, tmp_path):
         vault = _make_fixed_domains_vault(tmp_path)
@@ -910,7 +910,7 @@ class TestRunIntakeParaProjectOverride:
         assert result.frontmatter.type == "project"
         assert result.frontmatter.project == "launch-redesign"
         assert result.route is not None
-        assert result.route.destination == vault / "ops" / "sessions"
+        assert result.route.destination == vault / "Areas" / "ops" / "sessions"
         assert result.route.project_link_target == vault / "projects" / "launch-redesign.md"
 
 

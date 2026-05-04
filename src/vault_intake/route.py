@@ -73,6 +73,9 @@ _ARCHIVE_PROXY_FOLDERS: dict[NoteType, str] = {
 }
 
 _INBOX_NAME = "_inbox"
+# v0.3.0: domain-scoped session folders nest under PARA-canonical Areas/.
+# See bootstrap.py for the migration note.
+_AREAS_DIR = "Areas"
 
 
 def route(
@@ -155,10 +158,10 @@ def _resolve_fixed_domains_destination(
         folder = _ARCHIVE_PROXY_FOLDERS.get(effective_type, _INBOX_NAME)
         if folder == "sessions":
             return (
-                vault_path / domain / "sessions",
+                vault_path / _AREAS_DIR / domain / "sessions",
                 None,
                 False,
-                f"type={effective_type}, para=archive, would-be={domain}/sessions/",
+                f"type={effective_type}, para=archive, would-be={_AREAS_DIR}/{domain}/sessions/",
             )
         return (
             vault_path / folder,
@@ -190,10 +193,10 @@ def _resolve_fixed_domains_destination(
             )
         if effective_type in {"session", "note"}:
             return (
-                vault_path / domain / "sessions",
+                vault_path / _AREAS_DIR / domain / "sessions",
                 project_file,
                 False,
-                f"type={effective_type}, para=project, dest={domain}/sessions/ + link",
+                f"type={effective_type}, para=project, dest={_AREAS_DIR}/{domain}/sessions/ + link",
             )
         return (
             vault_path / _INBOX_NAME,
@@ -208,10 +211,10 @@ def _resolve_fixed_domains_destination(
     if table_dest is not None:
         if table_dest == "sessions":
             return (
-                vault_path / domain / "sessions",
+                vault_path / _AREAS_DIR / domain / "sessions",
                 None,
                 False,
-                f"type={effective_type}, para={p_cat}, dest={domain}/sessions/",
+                f"type={effective_type}, para={p_cat}, dest={_AREAS_DIR}/{domain}/sessions/",
             )
         return (
             vault_path / table_dest,
