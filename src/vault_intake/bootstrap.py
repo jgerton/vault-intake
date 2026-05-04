@@ -11,7 +11,7 @@ from pathlib import Path
 from .config import Config
 
 # Directories created unconditionally (mode-agnostic). `sessions` is not
-# here; domain-scoped <domain>/sessions/ dirs are created per domain instead.
+# here; domain-scoped Areas/<domain>/sessions/ dirs are created per domain.
 _STANDARD_DIRS: tuple[str, ...] = (
     "insights",
     "workflows",
@@ -22,6 +22,13 @@ _STANDARD_DIRS: tuple[str, ...] = (
     "_inbox",
     "inbox",
 )
+
+# v0.3.0: domain-scoped session folders nest under PARA-canonical Areas/.
+# Was <vault>/<domain>/sessions/ in v0.2.x; Elio feedback 2026-05-04 surfaced
+# the mismatch between flat-domain layout and the PARA mental model where
+# domains belong inside Areas. Migration: move existing <vault>/<domain>/
+# directories into <vault>/Areas/<domain>/.
+_AREAS_DIR = "Areas"
 
 _QUEUE_DIR = Path(".vault-intake") / "nlm_queue"
 
@@ -50,7 +57,7 @@ def bootstrap_vault(config: Config) -> list[Path]:
         ensured.append(d)
 
     for domain in config.domains:
-        sessions_dir = vault / domain.slug / "sessions"
+        sessions_dir = vault / _AREAS_DIR / domain.slug / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         ensured.append(sessions_dir)
 

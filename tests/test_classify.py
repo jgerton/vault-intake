@@ -313,3 +313,79 @@ def test_emergent_classify_handles_utf8_bom_in_frontmatter(tmp_path: Path) -> No
     config = _make_emergent_config(tmp_path)
     result = classify("Quero falar sobre marca no mercado.", config)
     assert result.primary == "marca"
+
+
+def test_emergent_proposed_theme_must_meet_min_word_length(tmp_path: Path) -> None:
+    """Elio feedback 2026-05-04: emergent themes need stronger thresholds.
+    Short tokens (< 4 chars) should not become proposed themes even if
+    they're the most frequent significant token, because short tokens
+    are usually noise (slang, fragments, ambiguous words)."""
+    config = Config(
+        vault_path=tmp_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="pt-BR",
+        skip_notebooklm=False,
+        refinement_enabled=False,
+        classification_confidence_threshold=0.6,
+    )
+    # "vai" is 3 chars and appears 3 times; "carreira" is 8 chars and appears 2 times.
+    # Without min-length filter, "vai" wins. With it, carreira wins.
+    # ("vai" is also in pt-BR stopwords; pick a non-stopword 3-char token.)
+    # "fim" (3 chars, "end" in pt) is not a stopword and appears 3 times.
+    text = "fim fim fim carreira carreira"
+    result = classify(text, config)
+    assert result.primary == "carreira"
+
+
+def test_emergent_proposes_nothing_when_no_token_meets_min_frequency(
+    tmp_path: Path,
+) -> None:
+    """Elio feedback 2026-05-04: if every significant token appears only
+    once, the emergent classifier shouldn't fabricate a theme. Better to
+    return empty + uncertain so the user picks the theme."""
+    config = Config(
+        vault_path=tmp_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="pt-BR",
+        skip_notebooklm=False,
+        refinement_enabled=False,
+        classification_confidence_threshold=0.6,
+    )
+    # Each significant token appears exactly once; no theme should be proposed.
+    text = "carreira foco principal estrategia objetivo proposito"
+    result = classify(text, config)
+    assert result.primary == ""
+    assert result.uncertain is True
+
+
+def test_emergent_classify_filters_ptbr_stopwords(tmp_path: Path) -> None:
+    """Elio feedback 2026-05-04: emergent mode classified pt-BR braindumps
+    as 'que' and 'eu' because the English-only stopword filter let common
+    Portuguese pronouns and connectors through. With pt-BR stopwords
+    applied, the proposed theme should be a content word (carreira), not
+    a pronoun (eu) or conjunction (que)."""
+    config = _make_emergent_config(tmp_path)
+    # Replace default emergent config to use pt-BR language
+    config = Config(
+        vault_path=tmp_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="pt-BR",
+        skip_notebooklm=False,
+        refinement_enabled=False,
+        classification_confidence_threshold=0.6,
+    )
+    text = (
+        "Eu quero que isso funcione e eu acho que carreira "
+        "carreira eh o foco principal agora."
+    )
+    result = classify(text, config)
+    assert result.primary == "carreira"
+    forbidden = {"eu", "que", "o", "e", "a"}
+    assert result.primary not in forbidden
+    assert not (set(result.secondary) & forbidden)

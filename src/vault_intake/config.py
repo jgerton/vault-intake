@@ -95,7 +95,7 @@ def resolve_config(claude_md_path: Path) -> Config:
         notebook_map=MappingProxyType(dict(raw.get("notebook_map") or {})),
         language=raw.get("language", "en"),
         skip_notebooklm=bool(raw.get("skip_notebooklm", False)),
-        refinement_enabled=bool(raw.get("refinement_enabled", True)),
+        refinement_enabled=bool(raw.get("refinement_enabled", False)),
         classification_confidence_threshold=threshold,
     )
 

@@ -2,6 +2,24 @@
 
 All notable changes to vault-intake are documented here.
 
+## [0.3.0] - 2026-05-04
+
+Elio dogfood feedback round 2: PARA-nested layout, multi-language stopwords, emergent classification guardrails, refinement default off.
+
+### Breaking changes
+
+- **Folder layout: domain-scoped sessions now nest under `Areas/`.** Previous: `<vault>/<domain>/sessions/`. New: `<vault>/Areas/<domain>/sessions/`. This matches the PARA mental model (domains are Areas-of-responsibility) and Elio's expectation. **Migration:** `mv <domain>/ Areas/` for each configured domain in your existing vault. See README "Migrating from v0.2.x" for the full procedure.
+- **`refinement_enabled` defaults to `false`.** Rule-based refinement was making text worse on Elio's pt-BR braindumps (95% identical to original, sometimes lossy). Default is off until LLM-based semantic refinement lands as a future feature. Existing vaults with `refinement_enabled: true` in `CLAUDE.md` are unaffected.
+
+### Fixed
+
+- **Emergent classification picked Portuguese stopwords as themes.** `_classify_emergent` filtered only English stopwords, so pt-BR braindumps surfaced pronouns ("eu") and conjunctions ("que") as proposed themes. v0.3.0 makes `_STOPWORDS` language-keyed (en, pt-BR, pt) and threads `config.language` through tokenization.
+
+### Added
+
+- **Emergent theme thresholds:** proposed themes now require minimum 4-character word length and minimum 2 occurrences in the text. Tokens that don't meet both thresholds return empty (uncertain), so the user picks the theme rather than getting "que" or "eu" auto-proposed.
+- **README:** "What is `sessions/` for?" mental-model paragraph; "Migrating from v0.2.x" section; updated path table reflecting `Areas/<domain>/sessions/`.
+
 ## [0.2.2] - 2026-05-04
 
 Skill invocation guidance: explicit delegation pattern to keep token cost bounded.

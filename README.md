@@ -1,6 +1,6 @@
 # vault-intake
 
-Trusted capture skill for Second-Brain vaults. Memory Branch M2 (v0.2.0) of the Agent OS project.
+Trusted capture skill for Second-Brain vaults. Memory Branch M2 (v0.3.0) of the Agent OS project.
 
 ## What it does
 
@@ -39,11 +39,13 @@ After running `bootstrap_vault()` against a configured vault, you'll have this l
 | `<vault>/CLAUDE.md` | Per-vault config. The `## Vault Config` block is the source of truth. |
 | `<vault>/inbox/` | Drop new `.md` files here for `--inbox` batch processing. |
 | `<vault>/_inbox/` | System fallback when classification is uncertain in emergent mode. |
-| `<vault>/<domain>/sessions/` | Where confirmed notes land in fixed_domains mode (one folder per configured domain). |
+| `<vault>/Areas/<domain>/sessions/` | Where confirmed notes land in fixed_domains mode (one folder per configured domain, nested under PARA-canonical `Areas/`). |
 | `<vault>/projects/` | PARA project hub notes. |
 | `<vault>/insights/`, `workflows/`, `prompts/`, `context/`, `references/` | Other PARA folders for fixed_domains routing. |
-| `<vault>/.vault-intake/inbox-processed/` | `--inbox` archive: source files moved here after successful processing. |
+| `<vault>/.vault-intake/inbox-processed/` | `--inbox` archive: source `.md` files moved here after successful processing. Keeps a record of what was processed and prevents re-processing on the next batch run. |
 | `<vault>/.vault-intake/nlm_queue/` | NotebookLM retry queue. Drained via `scripts/flush_nlm.py`. |
+
+**What is `sessions/` for?** It holds confirmed notes that came from `inbox/` after the pipeline classified them. Think of it as the "processed inbox archive that you keep" — domain-scoped raw captures and processed dictations. Other PARA folders (`projects/`, `insights/`, etc.) hold longer-form, structured outputs; `sessions/` is your day-to-day intake landing zone per domain.
 
 The vault is a regular folder. There is no central registry, no install-wide state file, no hidden config outside the vault itself. Move it, back it up, or delete it like any other directory.
 
@@ -83,9 +85,26 @@ The vault is a folder. To move it:
 
 If you have automation pointing at the old vault path (cron entries, shell aliases, the `VAULT_INTAKE_VAULT_PATH` env var), update those too.
 
+## Migrating from v0.2.x
+
+v0.3.0 nests domain-scoped sessions under PARA-canonical `Areas/`. If you upgraded from v0.2.x and have existing notes in the old layout, move them once:
+
+```bash
+cd /path/to/your/vault
+mkdir -p Areas
+# Move each configured domain folder into Areas/
+mv carreira Areas/
+mv ops Areas/
+# (etc. for each domain you have)
+```
+
+After that, all routing lands in the new location. Existing notes you've already moved keep working; new notes from `--inbox` go straight to `Areas/<domain>/sessions/`.
+
+If you'd rather rebuild from scratch, deleting the old empty domain folders (`carreira/`, `ops/`, etc.) is also fine; bootstrap recreates the new layout on the next run.
+
 ## Status
 
-Memory Branch M2 (v0.2.0). Active design-partner pilot. Not yet recommended for general production use.
+Memory Branch M2 (v0.3.0). Active design-partner pilot. Not yet recommended for general production use.
 
 ## License
 
