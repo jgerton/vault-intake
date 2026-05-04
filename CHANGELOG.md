@@ -2,6 +2,25 @@
 
 All notable changes to vault-intake are documented here.
 
+## [0.3.1] - 2026-05-04
+
+Codex post-implementation review of v0.3.0 caught a P0 phantom-theme bug introduced by the new PARA-nested layout, plus pt-BR contractions that slipped past the v0.3.0 stopword filter. Patch ships P0 + P1 fixes with six new regression tests.
+
+### Fixed
+
+- **Areas-as-phantom-theme (P0).** v0.3.0's PARA-nested layout creates `<vault>/Areas/` for fixed_domains configs. In emergent mode, `_collect_emergent_themes` only excluded underscore- and dot-prefixed folders, so `Areas/` (and any other PARA convention dir) became a theme candidate. With no scoring evidence, `_classify_emergent` fell back to the alphabetically-first folder, promoting `Areas` as the primary theme and routing the note into the PARA dir. v0.3.1 adds `Areas`, `Projects`, `Resources`, `Archives` to a `_SKIP_SYSTEM_DIRS` set, and removes the zero-score fallback so an empty proposed theme stays empty (uncertain) instead of grabbing the alphabetically-first folder.
+- **pt-BR contractions slipped past stopword filter.** v0.3.0 added `para` and `pra` but missed `pro`, `pros`, `pras`, `ai`, `aí`. `pras` is exactly 4 chars and slipped past `_MIN_THEME_WORD_LEN`, so a braindump with repeated `pras` proposed it as a theme. Added all five to the pt-BR stopword set.
+
+### Added
+
+- Six regression tests (Codex Bucket E):
+  1. PARA dirs (`Areas`/`Projects`/`Resources`/`Archives`) never become theme candidates
+  2. Word "areas" in input does not produce a confident `Areas` classification
+  3. `language: pt` alias filters pt-BR stopwords identically to `language: pt-BR`
+  4. Unknown `language: es` falls back to English stopwords without crashing
+  5. pt-BR contractions (`pras`, `pros`, `pro`, `ai`, `aí`) are filtered from emergent themes
+  6. Explicit `refinement_enabled: true` in CLAUDE.md round-trips to `Config.refinement_enabled is True` (pinning the contract claimed in the v0.3.0 changelog)
+
 ## [0.3.0] - 2026-05-04
 
 Elio dogfood feedback round 2: PARA-nested layout, multi-language stopwords, emergent classification guardrails, refinement default off.

@@ -362,6 +362,133 @@ def test_emergent_proposes_nothing_when_no_token_meets_min_frequency(
     assert result.uncertain is True
 
 
+def test_emergent_language_pt_alias_filters_ptbr_stopwords(tmp_path: Path) -> None:
+    """v0.3.1: pt is an alias for pt-BR. A vault configured with `language: pt`
+    must filter pt-BR pronouns and connectors (`eu`, `que`) the same as
+    `language: pt-BR`. Pins the alias contract from classify.py:101."""
+    config = Config(
+        vault_path=tmp_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="pt",
+        skip_notebooklm=False,
+        refinement_enabled=False,
+        classification_confidence_threshold=0.6,
+    )
+    text = (
+        "Eu quero que isso funcione e eu acho que carreira "
+        "carreira eh o foco principal agora."
+    )
+    result = classify(text, config)
+    assert result.primary == "carreira"
+    assert result.primary not in {"eu", "que", "o", "e"}
+
+
+def test_emergent_unknown_language_falls_back_to_english(tmp_path: Path) -> None:
+    """v0.3.1: an unrecognized language code (e.g. `es`) must not crash; it
+    falls back to English stopwords. Pins `_stopwords_for` default behavior
+    so a typo'd or unsupported language config does not raise."""
+    config = Config(
+        vault_path=tmp_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="es",
+        skip_notebooklm=False,
+        refinement_enabled=False,
+        classification_confidence_threshold=0.6,
+    )
+    # English stopwords filter "the" and "is"; "carreira" repeated qualifies as theme.
+    text = "the carreira is the carreira focus today."
+    # Should not raise even though es has no dedicated stopword set.
+    result = classify(text, config)
+    assert result.primary == "carreira"
+
+
+def test_emergent_para_dirs_never_become_theme_candidates(tmp_path: Path) -> None:
+    """Codex review of v0.3.0 (P0): the PARA-nested layout introduced in
+    v0.3.0 creates `<vault>/Areas/` for fixed_domains configs. If a vault
+    is in emergent mode and a PARA convention dir exists, it must not
+    become a phantom theme candidate. With no matching content in input,
+    pre-fix the alphabetically-first folder (Areas) was promoted as
+    primary; post-fix, primary stays empty and route falls back to _inbox."""
+    config = Config(
+        vault_path=tmp_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="en",
+        skip_notebooklm=False,
+        refinement_enabled=False,
+        classification_confidence_threshold=0.6,
+    )
+    (tmp_path / "Areas").mkdir()
+    (tmp_path / "Projects").mkdir()
+    (tmp_path / "Resources").mkdir()
+    (tmp_path / "Archives").mkdir()
+
+    # Generic content with no folder-name overlap and no repeated content tokens
+    result = classify("Some generic content here.", config)
+
+    assert result.primary != "Areas"
+    assert result.primary != "Projects"
+    assert result.primary != "Resources"
+    assert result.primary != "Archives"
+    for forbidden in ("Areas", "Projects", "Resources", "Archives"):
+        assert forbidden not in result.secondary
+
+
+def test_emergent_areas_word_in_input_does_not_force_confident_routing(
+    tmp_path: Path,
+) -> None:
+    """v0.3.1: even when input mentions 'areas' literally, the existence of
+    a PARA `Areas/` folder must not push confidence high enough to bypass
+    the uncertain gate. The PARA dir is filtered from theme candidates,
+    so any 'areas' the user typed is handled by the propose-from-text path
+    which sets uncertain=True."""
+    config = Config(
+        vault_path=tmp_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="en",
+        skip_notebooklm=False,
+        refinement_enabled=False,
+        classification_confidence_threshold=0.6,
+    )
+    (tmp_path / "Areas").mkdir()
+
+    result = classify("areas areas of focus matter today.", config)
+
+    # `Areas` (capital A) must never be returned as a confident folder match.
+    assert not (result.primary == "Areas" and result.uncertain is False)
+
+
+def test_emergent_filters_ptbr_contractions(tmp_path: Path) -> None:
+    """Codex review v0.3.0 follow-up: pt-BR contractions `pro`, `pros`, `pras`,
+    `ai`, `aí` need to be in the stopword set. `pras` is exactly 4 chars and
+    slips past _MIN_THEME_WORD_LEN; without filtering, repeated contractions
+    surface as proposed themes."""
+    config = Config(
+        vault_path=tmp_path,
+        mode="emergent",
+        domains=(),
+        notebook_map=MappingProxyType({}),
+        language="pt-BR",
+        skip_notebooklm=False,
+        refinement_enabled=False,
+        classification_confidence_threshold=0.6,
+    )
+    # pras and pros each appear twice (>= _MIN_THEME_FREQUENCY) and are 4 chars
+    # (>= _MIN_THEME_WORD_LEN). Only stopword filtering keeps them out.
+    text = "pras pras pros pros carreira"
+    result = classify(text, config)
+    assert result.primary not in {"pras", "pros", "pro", "ai", "aí"}
+    for forbidden in ("pras", "pros", "pro", "ai", "aí"):
+        assert forbidden not in result.secondary
+
+
 def test_emergent_classify_filters_ptbr_stopwords(tmp_path: Path) -> None:
     """Elio feedback 2026-05-04: emergent mode classified pt-BR braindumps
     as 'que' and 'eu' because the English-only stopword filter let common

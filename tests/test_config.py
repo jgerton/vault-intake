@@ -53,6 +53,23 @@ def test_applies_defaults_when_optional_fields_missing(write_claude_md, tmp_path
     assert config.refinement_enabled is False
 
 
+def test_explicit_refinement_enabled_true_resolves_to_true(write_claude_md, tmp_path):
+    """v0.3.1 (Codex review of v0.3.0): the v0.3.0 changelog claims existing
+    vaults with `refinement_enabled: true` are unaffected by the default flip.
+    Pin that contract: an explicit `true` in CLAUDE.md must round-trip to
+    Config.refinement_enabled is True, regardless of the new default."""
+    claude_md = write_claude_md({
+        "vault_path": str(tmp_path),
+        "classification_mode": "emergent",
+        "routing_mode": "emergent",
+        "refinement_enabled": True,
+    })
+
+    config = resolve_config(claude_md)
+
+    assert config.refinement_enabled is True
+
+
 def test_preserves_explicit_optional_fields(write_claude_md, tmp_path):
     claude_md = write_claude_md({
         "vault_path": str(tmp_path),
